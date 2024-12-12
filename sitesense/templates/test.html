@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>SEO Analyzer</title>
+</head>
+<body>
+    <h1>SEO Analyzer</h1>
+    <form method="get" action="{% url 'analyze_page' %}">
+        <label for="url">Enter Webpage URL:</label>
+        <input type="text" id="url" name="url">
+        <button type="submit">Analyze</button>
+    </form>
+</body>
+</html>
