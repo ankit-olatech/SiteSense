@@ -3,6 +3,7 @@ from django.shortcuts import render
 from .models import *
 import requests
 from bs4 import BeautifulSoup
+import json
 
 def index(request):
     return render(request, 'test.html')
