@@ -6,7 +6,7 @@ from bs4 import BeautifulSoup
 import json
 
 def index(request):
-    return render(request, 'test.html')
+    return render(request, 'index.html')
 def analyze_page(request):
     if request.method == 'GET':
         url = request.GET.get('url')
@@ -104,6 +104,11 @@ def analyze_page_speed(url):
         # Call Lighthouse API or use Google PageSpeed API for detailed insights
         response = requests.get(f'https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url={url}')
         data = response.json()
+        # print("lighthouse result", data['lighthouseResult'])
+        # print("cateogries", data['categories'])
+        # print("Performance", data['performance'])
+        # print("Score", data['score'])
+
         return data['lighthouseResult']['categories']['performance']['score']
     except Exception as e:
         return {"error": f"Failed to fetch page speed: {str(e)}"}
