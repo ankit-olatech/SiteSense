@@ -8,6 +8,10 @@ import json
 from urllib.parse import urlparse
 import re
 import os
+import openai
+from textstat import flesch_reading_ease
+
+# client = OpenAI(api_key='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')
 # API KEY FOR PAGESPEED
 #  AIzaSyCzMj9hqnN8lSmMIc2vMQZ2mC9N-AcNvcQ 
 
@@ -73,14 +77,32 @@ def analyze_page(request):
 # 1. On-Page Optimization
 def analyze_on_page_optimization(content):
     soup = BeautifulSoup(content, 'html.parser')
-    headings = soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
-    keyword_density = get_keyword_density(content)
     
-    # Example on how you might analyze on-page optimization
+    # Find all headings (h1 to h6)
+    headings = soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
+    
+    # Organize headings by their tag (h1, h2, etc.)
+    heading_hierarchy = {
+        'h1': [],
+        'h2': [],
+        'h3': [],
+        'h4': [],
+        'h5': [],
+        'h6': []
+    }
+    
+    for heading in headings:
+        tag = heading.name  # This gets the name of the tag (e.g., 'h1', 'h2', etc.)
+        heading_hierarchy[tag].append(heading.text.strip())  # Append the heading text
+    
+    # Calculate keyword density (Placeholder for actual function)
+    keyword_density = get_keyword_density(content)
+
     return {
-        'headings': [heading.text for heading in headings],
+        'headings': heading_hierarchy,  # Now includes each heading level and its corresponding text
         'keyword_density': keyword_density
     }
+
 
 def get_keyword_density(content):
     # Count the frequency of a specific keyword
@@ -111,19 +133,77 @@ def validate_schema(content):
     soup = BeautifulSoup(content, 'html.parser')
     schema_data = soup.find_all('script', type='application/ld+json')
     schemas = []
+    recommendations = []
+
     for item in schema_data:
         try:
-            schemas.append(json.loads(item.string))
-        except json.JSONDecodeError:
-            schemas.append(None)
-    return schemas
+            schema = json.loads(item.string)
+            schemas.append(schema)
 
-# 4. AI Content Detection (Using heuristic-based approach or machine learning model)
+            # Check for common schema types
+            schema_type = schema.get('@type', None)
+            if schema_type:
+                # Suggestions for improvement
+                if schema_type == "Product" and "offers" not in schema:
+                    recommendations.append("Add 'offers' property to the Product schema for pricing details.")
+                if schema_type == "Article" and "author" not in schema:
+                    recommendations.append("Add 'author' property to the Article schema for attribution.")
+                if schema_type == "Review" and "reviewRating" not in schema:
+                    recommendations.append("Include 'reviewRating' in Review schema for better user insights.")
+            else:
+                recommendations.append("Schema type is missing. Add '@type' to define the schema's purpose.")
+
+        except json.JSONDecodeError:
+            recommendations.append("Invalid JSON-LD detected. Fix formatting issues.")
+
+    # Detect Missing Schema Types
+    if not schema_data:
+        recommendations.append("No schema markup detected. Add appropriate schema types like Product, Article, or Review based on page content.")
+    else:
+        if not any(schema.get('@type') == "BreadcrumbList" for schema in schemas):
+            recommendations.append("Add 'BreadcrumbList' schema to improve navigation.")
+        if not any(schema.get('@type') == "Organization" for schema in schemas):
+            recommendations.append("Add 'Organization' schema to provide details about the website owner.")
+
+    return {
+        "schemas_detected": schemas,
+        "recommendations": recommendations
+    }
+
+
+
 def detect_ai_content(content):
-    # Placeholder function for AI content detection.
-    # Example: You could integrate an AI content detection model or heuristic-based methods here.
-    # For now, returning a simple boolean.
-    return 'AI content' in content  # A simple check for demonstration
+    # Check for AI-like patterns (heuristics)
+    ai_detected = 'AI content' in content  # Simple placeholder logic for AI markers
+    readability_score = flesch_reading_ease(content)
+
+    try:
+        # Suggest rewrite using OpenAI GPT API
+        openai.api_key = 'k-proj-uu94BHcVuwNsiLbV9GUssPFWrSecK7EeyvFK17IcPINslOJu-OIbrt1nCknmcgXrWQH30LzbNiT3BlbkFJot0E3juP913Aaw7T4HUC9puEqD2nBEgBYwp0IjNeaexN2WV7yYlsGydF_Jm-uFoFNHq_uOUVoA'
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a helpful assistant that rewrites text to sound more human."
+                },
+                {
+                    "role": "user",
+                    "content": f"The following text may be AI-generated. Rewrite it to sound more human: {content}"
+                }
+            ],
+            max_tokens=500,
+            temperature=0.7
+        )
+        human_suggestion = response['choices'][0]['message']['content'].strip()
+    except Exception as e:
+        human_suggestion = f"Error generating suggestion: {str(e)}"
+
+    return {
+        "ai_detected": ai_detected or readability_score < 50,
+        "readability_score": readability_score,
+        "human_suggestion": human_suggestion
+    }
 
 # 5. Page Speed Analysis
 def analyze_page_speed(url):
@@ -133,7 +213,7 @@ def analyze_page_speed(url):
             f'https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url={url}&key=AIzaSyCzMj9hqnN8lSmMIc2vMQZ2mC9N-AcNvcQ'
         )
         data = response.json()
-        
+
         # Extract detailed insights from the response
         lighthouse_result = data.get('lighthouseResult', {})
         categories = lighthouse_result.get('categories', {})
@@ -149,7 +229,7 @@ def analyze_page_speed(url):
             "Time_to_Interactive": audits.get('interactive', {}).get('displayValue', 'N/A'),
             "Total_Blocking_Time": audits.get('total-blocking-time', {}).get('displayValue', 'N/A')
         }
-        
+
         return page_speed_results
 
     except Exception as e:
@@ -160,7 +240,7 @@ def check_meta_tags(content):
     soup = BeautifulSoup(content, 'html.parser')
     meta_desc = soup.find('meta', attrs={'name': 'description'})
     meta_keywords = soup.find('meta', attrs={'name': 'keywords'})
-    
+
     return {
         'meta_description': meta_desc['content'] if meta_desc else None,
         'meta_keywords': meta_keywords['content'] if meta_keywords else None
@@ -177,7 +257,7 @@ def check_meta_tags(content):
 def analyze_keyword_summary(page_content):
     soup = BeautifulSoup(page_content, 'html.parser')
     text_content = soup.get_text()
-    
+
     # Count words and extract keywords
     words = re.findall(r'\w+', text_content.lower())
     word_freq = {}
@@ -187,10 +267,10 @@ def analyze_keyword_summary(page_content):
 
     total_words = len(words)
     sorted_keywords = sorted(word_freq.items(), key=lambda x: x[1], reverse=True)[:10]  # Top 10 keywords
-    
+
     # Keyword density analysis
     keyword_density = {kw: round((count / total_words) * 100, 2) for kw, count in sorted_keywords}
-    
+
     return {
         "top_keywords": sorted_keywords,
         "keyword_density": keyword_density,
@@ -281,7 +361,7 @@ def analyze_blog_optimization(page_content, url):
     # Detect blog-like structures
     title = soup.find('title').get_text(strip=True) if soup.find('title') else "No title"
     h1_tags = [h1.get_text(strip=True) for h1 in soup.find_all('h1')]
-    
+
     # Generate suggested blog title
     suggested_title = f"Ultimate Guide to {title.split()[0]} | Tips & Insights"
 
