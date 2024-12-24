@@ -9,10 +9,14 @@ from urllib.parse import urlparse
 import re
 import os
 # from openai import OpenAI
-from openai import OpenAI
-
-client = OpenAI(api_key='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')
+import openai
 from textstat import flesch_reading_ease
+from sklearn.feature_extraction.text import TfidfVectorizer
+import re
+import nltk
+from nltk.tokenize import sent_tokenize
+from collections import Counter
+from heapq import nlargest
 
 # API KEY FOR PAGESPEED
 #  AIzaSyCzMj9hqnN8lSmMIc2vMQZ2mC9N-AcNvcQ 
@@ -79,10 +83,10 @@ def analyze_page(request):
 # 1. On-Page Optimization
 def analyze_on_page_optimization(content):
     soup = BeautifulSoup(content, 'html.parser')
-
+    
     # Find all headings (h1 to h6)
     headings = soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
-
+    
     # Organize headings by their tag (h1, h2, etc.)
     heading_hierarchy = {
         'h1': [],
@@ -92,11 +96,11 @@ def analyze_on_page_optimization(content):
         'h5': [],
         'h6': []
     }
-
+    
     for heading in headings:
         tag = heading.name  # This gets the name of the tag (e.g., 'h1', 'h2', etc.)
         heading_hierarchy[tag].append(heading.text.strip())  # Append the heading text
-
+    
     # Calculate keyword density (Placeholder for actual function)
     keyword_density = get_keyword_density(content)
 
@@ -174,6 +178,7 @@ def validate_schema(content):
 
 
 # Set the OpenAI API key
+openai.api_key = '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'
 
 def detect_ai_content(content):
     # Check for AI-like patterns (heuristics)
@@ -188,20 +193,22 @@ def detect_ai_content(content):
 
     try:
         # Suggest rewrite using OpenAI GPT API
-        response = client.chat.completions.create(model="gpt-3.5-turbo",
-        messages=[
-            {
-                "role": "system",
-                "content": "You are a helpful assistant that rewrites text to sound more human."
-            },
-            {
-                "role": "user",
-                "content": f"The following text may be AI-generated. Rewrite it to sound more human: {content}"
-            }
-        ],
-        max_tokens=500,
-        temperature=0.7)
-        human_suggestion = response.choices[0].message.content.strip()
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a helpful assistant that rewrites text to sound more human."
+                },
+                {
+                    "role": "user",
+                    "content": f"The following text may be AI-generated. Rewrite it to sound more human: {content}"
+                }
+            ],
+            max_tokens=500,
+            temperature=0.7
+        )
+        human_suggestion = response['choices'][0]['message']['content'].strip()
     except Exception as e:
         human_suggestion = f"Error generating suggestion: {str(e)}"
 
@@ -274,16 +281,59 @@ def analyze_page_speed(url):
         return {"error": f"Failed to fetch page speed: {str(e)}"}
 
 # 6. Meta Tags and Keyword Suggestions
+# def check_meta_tags(content):
+#     soup = BeautifulSoup(content, 'html.parser')
+#     meta_desc = soup.find('meta', attrs={'name': 'description'})
+#     meta_keywords = soup.find('meta', attrs={'name': 'keywords'})
+
+#     return {
+#         'meta_description': meta_desc['content'] if meta_desc else None,
+#         'meta_keywords': meta_keywords['content'] if meta_keywords else None
+#     }
+
+
 def check_meta_tags(content):
+    # Parse HTML content
     soup = BeautifulSoup(content, 'html.parser')
+    
+    # Check for meta description and keywords
     meta_desc = soup.find('meta', attrs={'name': 'description'})
     meta_keywords = soup.find('meta', attrs={'name': 'keywords'})
+    
+    # Extract content text for analysis
+    page_text = soup.get_text(separator=' ')
+    
+    # Analyze content for keyword suggestions
+    suggested_keywords = suggest_keywords(page_text)
 
+    # Evaluate meta keywords relevance
+    existing_keywords = meta_keywords['content'].split(',') if meta_keywords else []
+    irrelevant_keywords = [kw for kw in existing_keywords if kw.lower() not in page_text.lower()]
+    
     return {
         'meta_description': meta_desc['content'] if meta_desc else None,
-        'meta_keywords': meta_keywords['content'] if meta_keywords else None
+        'meta_keywords': existing_keywords if meta_keywords else None,
+        'irrelevant_keywords': irrelevant_keywords,
+        'suggested_keywords': suggested_keywords
     }
 
+
+def suggest_keywords(content):
+    """
+    Suggest relevant keywords based on content using TF-IDF.
+    """
+    # Tokenize content into smaller segments for keyword extraction
+    segments = [content[i:i+500] for i in range(0, len(content), 500)]
+    
+    # Calculate TF-IDF scores for keyword extraction
+    vectorizer = TfidfVectorizer(stop_words='english', max_features=10)
+    tfidf_matrix = vectorizer.fit_transform(segments)
+    feature_names = vectorizer.get_feature_names_out()
+    
+    # Extract keywords with the highest scores
+    keywords = list(feature_names)
+    
+    return keywords
 
 
 
@@ -292,29 +342,71 @@ def check_meta_tags(content):
 # ---------------------------------
 # 1. Keyword Summary
 # ---------------------------------
-def analyze_keyword_summary(page_content):
-    soup = BeautifulSoup(page_content, 'html.parser')
-    text_content = soup.get_text()
+# def analyze_keyword_summary(page_content):
+#     soup = BeautifulSoup(page_content, 'html.parser')
+#     text_content = soup.get_text()
 
-    # Count words and extract keywords
+#     # Count words and extract keywords
+#     words = re.findall(r'\w+', text_content.lower())
+#     word_freq = {}
+#     for word in words:
+#         if len(word) > 3:  # Ignore short words
+#             word_freq[word] = word_freq.get(word, 0) + 1
+
+#     total_words = len(words)
+#     sorted_keywords = sorted(word_freq.items(), key=lambda x: x[1], reverse=True)[:10]  # Top 10 keywords
+
+#     # Keyword density analysis
+#     keyword_density = {kw: round((count / total_words) * 100, 2) for kw, count in sorted_keywords}
+
+#     return {
+#         "top_keywords": sorted_keywords,
+#         "keyword_density": keyword_density,
+#         "suggested_density": "1-2% per keyword for SEO."
+#     }
+
+# 1.1 Page SUmmary
+
+nltk.download('punkt_tab')  # Download tokenizer for sentence splitting
+
+def analyze_keyword_summary(page_content):
+    # Parse the HTML content
+    soup = BeautifulSoup(page_content, 'html.parser')
+    text_content = soup.get_text(separator=" ")
+
+    # Word frequency analysis
     words = re.findall(r'\w+', text_content.lower())
     word_freq = {}
     for word in words:
         if len(word) > 3:  # Ignore short words
             word_freq[word] = word_freq.get(word, 0) + 1
 
+    # Total word count
     total_words = len(words)
     sorted_keywords = sorted(word_freq.items(), key=lambda x: x[1], reverse=True)[:10]  # Top 10 keywords
 
     # Keyword density analysis
     keyword_density = {kw: round((count / total_words) * 100, 2) for kw, count in sorted_keywords}
 
+    # Summary generation
+    sentences = sent_tokenize(text_content)
+    sentence_scores = {}
+    for sentence in sentences:
+        for word, freq in sorted_keywords:
+            if word in sentence.lower():
+                sentence_scores[sentence] = sentence_scores.get(sentence, 0) + freq
+
+    # Extract the most relevant sentences (gist)
+    summary_sentences = nlargest(3, sentence_scores, key=sentence_scores.get)
+    summary = " ".join(summary_sentences)
+
     return {
         "top_keywords": sorted_keywords,
         "keyword_density": keyword_density,
-        "suggested_density": "1-2% per keyword for SEO."
+        "suggested_density": "1-2% per keyword for SEO.",
+        "summary": summary,
+        "gist": f"The page discusses topics centered around {', '.join([kw for kw, _ in sorted_keywords[:5]])}."
     }
-
 
 # ---------------------------------
 # 2. Anchor Tag Suggestions
