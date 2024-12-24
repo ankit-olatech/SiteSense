@@ -8,13 +8,15 @@ import json
 from urllib.parse import urlparse
 import re
 import os
-import openai
+# from openai import OpenAI
+from openai import OpenAI
+
+client = OpenAI(api_key='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')
 from textstat import flesch_reading_ease
 
-# client = OpenAI(api_key='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')
 # API KEY FOR PAGESPEED
 #  AIzaSyCzMj9hqnN8lSmMIc2vMQZ2mC9N-AcNvcQ 
-
+# print(openai.__version__)
 def index(request):
     return render(request, 'index.html')
 def analyze_page(request):
@@ -77,10 +79,10 @@ def analyze_page(request):
 # 1. On-Page Optimization
 def analyze_on_page_optimization(content):
     soup = BeautifulSoup(content, 'html.parser')
-    
+
     # Find all headings (h1 to h6)
     headings = soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
-    
+
     # Organize headings by their tag (h1, h2, etc.)
     heading_hierarchy = {
         'h1': [],
@@ -90,11 +92,11 @@ def analyze_on_page_optimization(content):
         'h5': [],
         'h6': []
     }
-    
+
     for heading in headings:
         tag = heading.name  # This gets the name of the tag (e.g., 'h1', 'h2', etc.)
         heading_hierarchy[tag].append(heading.text.strip())  # Append the heading text
-    
+
     # Calculate keyword density (Placeholder for actual function)
     keyword_density = get_keyword_density(content)
 
@@ -171,39 +173,75 @@ def validate_schema(content):
     }
 
 
+# Set the OpenAI API key
 
 def detect_ai_content(content):
     # Check for AI-like patterns (heuristics)
     ai_detected = 'AI content' in content  # Simple placeholder logic for AI markers
-    readability_score = flesch_reading_ease(content)
+
+    try:
+        # Calculate readability score
+        readability_score = flesch_reading_ease(content)
+    except Exception as e:
+        readability_score = None
+        print(f"Error calculating readability score: {e}")
 
     try:
         # Suggest rewrite using OpenAI GPT API
-        openai.api_key = 'k-proj-uu94BHcVuwNsiLbV9GUssPFWrSecK7EeyvFK17IcPINslOJu-OIbrt1nCknmcgXrWQH30LzbNiT3BlbkFJot0E3juP913Aaw7T4HUC9puEqD2nBEgBYwp0IjNeaexN2WV7yYlsGydF_Jm-uFoFNHq_uOUVoA'
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a helpful assistant that rewrites text to sound more human."
-                },
-                {
-                    "role": "user",
-                    "content": f"The following text may be AI-generated. Rewrite it to sound more human: {content}"
-                }
-            ],
-            max_tokens=500,
-            temperature=0.7
-        )
-        human_suggestion = response['choices'][0]['message']['content'].strip()
+        response = client.chat.completions.create(model="gpt-3.5-turbo",
+        messages=[
+            {
+                "role": "system",
+                "content": "You are a helpful assistant that rewrites text to sound more human."
+            },
+            {
+                "role": "user",
+                "content": f"The following text may be AI-generated. Rewrite it to sound more human: {content}"
+            }
+        ],
+        max_tokens=500,
+        temperature=0.7)
+        human_suggestion = response.choices[0].message.content.strip()
     except Exception as e:
         human_suggestion = f"Error generating suggestion: {str(e)}"
 
     return {
-        "ai_detected": ai_detected or readability_score < 50,
+        "ai_detected": ai_detected or (readability_score is not None and readability_score < 50),
         "readability_score": readability_score,
         "human_suggestion": human_suggestion
     }
+# def detect_ai_content(content):
+#     # Check for AI-like patterns (heuristics)
+#     ai_detected = 'AI content' in content  # Simple placeholder logic for AI markers
+#     readability_score = flesch_reading_ease(content)
+
+#     try:
+#         # Suggest rewrite using OpenAI GPT API
+#         openai.api_key = "your-api-key-here"
+#         response = openai.ChatCompletion.create(
+#             model="gpt-3.5-turbo",
+#             messages=[
+#                 {
+#                     "role": "system",
+#                     "content": "You are a helpful assistant that rewrites text to sound more human."
+#                 },
+#                 {
+#                     "role": "user",
+#                     "content": f"The following text may be AI-generated. Rewrite it to sound more human: {content}"
+#                 }
+#             ],
+#             max_tokens=500,
+#             temperature=0.7
+#         )
+#         human_suggestion = response['choices'][0]['message']['content'].strip()
+#     except Exception as e:
+#         human_suggestion = f"Error generating suggestion: {str(e)}"
+
+#     return {
+#         "ai_detected": ai_detected or readability_score < 50,
+#         "readability_score": readability_score,
+#         "human_suggestion": human_suggestion
+#     }
 
 # 5. Page Speed Analysis
 def analyze_page_speed(url):
