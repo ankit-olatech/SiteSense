@@ -136,46 +136,74 @@ def analyze_h1_tag(content):
     }
 
 # 3. Schema Validation
-def validate_schema(content):
-    soup = BeautifulSoup(content, 'html.parser')
-    schema_data = soup.find_all('script', type='application/ld+json')
+# def validate_schema(content):
+#     soup = BeautifulSoup(content, 'html.parser')
+#     schema_data = soup.find_all('script', type='application/ld+json')
+#     schemas = []
+#     recommendations = []
+
+#     for item in schema_data:
+#         try:
+#             schema = json.loads(item.string)
+#             schemas.append(schema)
+
+#             # Check for common schema types
+#             schema_type = schema.get('@type', None)
+#             if schema_type:
+#                 # Suggestions for improvement
+#                 if schema_type == "Product" and "offers" not in schema:
+#                     recommendations.append("Add 'offers' property to the Product schema for pricing details.")
+#                 if schema_type == "Article" and "author" not in schema:
+#                     recommendations.append("Add 'author' property to the Article schema for attribution.")
+#                 if schema_type == "Review" and "reviewRating" not in schema:
+#                     recommendations.append("Include 'reviewRating' in Review schema for better user insights.")
+#             else:
+#                 recommendations.append("Schema type is missing. Add '@type' to define the schema's purpose.")
+
+#         except json.JSONDecodeError:
+#             recommendations.append("Invalid JSON-LD detected. Fix formatting issues.")
+
+#     # Detect Missing Schema Types
+#     if not schema_data:
+#         recommendations.append("No schema markup detected. Add appropriate schema types like Product, Article, or Review based on page content.")
+#     else:
+#         if not any(schema.get('@type') == "BreadcrumbList" for schema in schemas):
+#             recommendations.append("Add 'BreadcrumbList' schema to improve navigation.")
+#         if not any(schema.get('@type') == "Organization" for schema in schemas):
+#             recommendations.append("Add 'Organization' schema to provide details about the website owner.")
+
+#     return {
+#         "schemas_detected": schemas,
+#         "recommendations": recommendations
+#     }
+def validate_schema(page_content):
+    """
+    Validates schema.org structured data in the page content.
+    """
+    soup = BeautifulSoup(page_content, 'html.parser')
+    scripts = soup.find_all('script', type='application/ld+json')
+
     schemas = []
-    recommendations = []
-
-    for item in schema_data:
+    for script in scripts:
         try:
-            schema = json.loads(item.string)
-            schemas.append(schema)
-
-            # Check for common schema types
-            schema_type = schema.get('@type', None)
-            if schema_type:
-                # Suggestions for improvement
-                if schema_type == "Product" and "offers" not in schema:
-                    recommendations.append("Add 'offers' property to the Product schema for pricing details.")
-                if schema_type == "Article" and "author" not in schema:
-                    recommendations.append("Add 'author' property to the Article schema for attribution.")
-                if schema_type == "Review" and "reviewRating" not in schema:
-                    recommendations.append("Include 'reviewRating' in Review schema for better user insights.")
-            else:
-                recommendations.append("Schema type is missing. Add '@type' to define the schema's purpose.")
-
+            data = json.loads(script.string)
+            schemas.append(data)
         except json.JSONDecodeError:
-            recommendations.append("Invalid JSON-LD detected. Fix formatting issues.")
+            continue
 
-    # Detect Missing Schema Types
-    if not schema_data:
-        recommendations.append("No schema markup detected. Add appropriate schema types like Product, Article, or Review based on page content.")
-    else:
-        if not any(schema.get('@type') == "BreadcrumbList" for schema in schemas):
-            recommendations.append("Add 'BreadcrumbList' schema to improve navigation.")
-        if not any(schema.get('@type') == "Organization" for schema in schemas):
-            recommendations.append("Add 'Organization' schema to provide details about the website owner.")
-
-    return {
-        "schemas_detected": schemas,
-        "recommendations": recommendations
-    }
+    # Analyze the schema data
+    results = []
+    for schema in schemas:
+        if isinstance(schema, dict):  # If schema is a dictionary
+            schema_type = schema.get('@type', None)
+            results.append({"type": schema_type, "content": schema})
+        elif isinstance(schema, list):  # If schema is a list
+            for item in schema:
+                if isinstance(item, dict):  # Check each item in the list
+                    schema_type = item.get('@type', None)
+                    results.append({"type": schema_type, "content": item})
+    
+    return results if results else {"error": "No valid schema found"}
 
 
 # Set the OpenAI API key
@@ -492,6 +520,7 @@ def get_competitor_urls(keywords):
     """
     search_engine_url = "https://www.google.com/search"
     params = {"q": f"{keywords} blog", "num": 5}  # Search query for competitor blogs
+    print(params)
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
     }
