@@ -485,19 +485,109 @@ def validate_sitemap(url):
 # ---------------------------------
 # 6. Blog Optimization
 # ---------------------------------
-def analyze_blog_optimization(page_content, url):
-    soup = BeautifulSoup(page_content, 'html.parser')
 
-    # Detect blog-like structures
+def get_competitor_urls(keywords):
+    """
+    Dynamically fetch competitor blog URLs using a search query.
+    """
+    search_engine_url = "https://www.google.com/search"
+    params = {"q": f"{keywords} blog", "num": 5}  # Search query for competitor blogs
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    }
+
+    try:
+        response = requests.get(search_engine_url, params=params, headers=headers)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        # Parse search result URLs using the updated structure
+        links = []
+        for result in soup.select('.tF2Cxc a'):  # Adjusted selector for Google results
+            href = result.get("href")
+            if href:
+                links.append(href)
+        print("Competitor URLs:", links[:5])
+        return links[:5]  # Return top 5 results
+    except Exception as e:
+        print(f"Error fetching competitor URLs: {e}")
+        return []
+
+
+
+def extract_main_keywords(text_content):
+    """
+    Extract main keywords from the text content using regex or basic frequency analysis.
+    """
+    words = re.findall(r'\b\w+\b', text_content.lower())
+    stopwords = set(["the", "and", "is", "in", "to", "for", "of", "a", "on", "with", "by", "an", "as"])
+    keyword_freq = {}
+
+    for word in words:
+        if word not in stopwords:
+            keyword_freq[word] = keyword_freq.get(word, 0) + 1
+
+    # Return top 5 most frequent words as keywords
+    sorted_keywords = sorted(keyword_freq, key=keyword_freq.get, reverse=True)
+    return " ".join(sorted_keywords[:5])
+
+
+def analyze_blog_optimization(page_content, url):
+    """
+    Analyze blog optimization and generate suggestions.
+    """
+    # Parse the blog content
+    soup = BeautifulSoup(page_content, 'html.parser')
     title = soup.find('title').get_text(strip=True) if soup.find('title') else "No title"
     h1_tags = [h1.get_text(strip=True) for h1 in soup.find_all('h1')]
 
+    # Extract keywords from the blog content
+    meta_keywords = soup.find("meta", attrs={"name": "keywords"})
+    keywords = meta_keywords["content"] if meta_keywords else extract_main_keywords(soup.get_text())
+
+    # Fetch competitor blog URLs dynamically
+    competitor_urls = get_competitor_urls(keywords)
+
+    # Analyze competitor blog titles
+    competitor_titles = []
+    for competitor_url in competitor_urls:
+        try:
+            response = requests.get(competitor_url, timeout=5)
+            competitor_soup = BeautifulSoup(response.text, 'html.parser')
+            competitor_title = competitor_soup.find('title').get_text(strip=True) if competitor_soup.find('title') else "No title"
+            competitor_titles.append(competitor_title)
+        except Exception as e:
+            competitor_titles.append(f"Error fetching {competitor_url}: {e}")
+
     # Generate suggested blog title
-    suggested_title = f"Ultimate Guide to {title.split()[0]} | Tips & Insights"
+    suggested_title = generate_suggested_title(title, competitor_titles)
 
     return {
         "current_title": title,
         "h1_tags": h1_tags,
         "suggested_title": suggested_title,
+        "competitor_titles": competitor_titles,
         "summary": "Add keyword-rich blog titles and ensure H1 tags match content."
     }
+
+
+def generate_suggested_title(current_title, competitor_titles):
+    """
+    Generate a new blog title based on competitor analysis.
+    """
+    if competitor_titles:
+        most_relevant = competitor_titles[0]
+        return f"Better than {most_relevant} | {current_title.split()[0]} Insights"
+    return f"Ultimate Guide to {current_title.split()[0]} | Tips & Insights"
+
+
+
+
+
+# USING GOOGLE JSON API- excluding scraping style
+# from googleapiclient.discovery import build
+
+# def get_competitor_urls_via_api(keywords, api_key, cse_id):
+#     service = build("customsearch", "v1", developerKey=api_key)
+#     results = service.cse().list(q=f"{keywords} blog", cx=cse_id, num=5).execute()
+#     links = [item['link'] for item in results.get('items', [])]
+#     print("Competitor URLs via API:", links)
+#     return links
