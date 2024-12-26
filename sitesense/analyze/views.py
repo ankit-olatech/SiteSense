@@ -9,7 +9,9 @@ from urllib.parse import urlparse
 import re
 import os
 # from openai import OpenAI
-import openai
+from openai import OpenAI
+
+client = OpenAI(api_key='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')
 from textstat import flesch_reading_ease
 from sklearn.feature_extraction.text import TfidfVectorizer
 import re
@@ -20,7 +22,6 @@ from heapq import nlargest
 
 # API KEY FOR PAGESPEED
 #  AIzaSyCzMj9hqnN8lSmMIc2vMQZ2mC9N-AcNvcQ 
-# print(openai.__version__)
 def index(request):
     return render(request, 'index.html')
 def analyze_page(request):
@@ -83,10 +84,10 @@ def analyze_page(request):
 # 1. On-Page Optimization
 def analyze_on_page_optimization(content):
     soup = BeautifulSoup(content, 'html.parser')
-    
+
     # Find all headings (h1 to h6)
     headings = soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
-    
+
     # Organize headings by their tag (h1, h2, etc.)
     heading_hierarchy = {
         'h1': [],
@@ -96,11 +97,11 @@ def analyze_on_page_optimization(content):
         'h5': [],
         'h6': []
     }
-    
+
     for heading in headings:
         tag = heading.name  # This gets the name of the tag (e.g., 'h1', 'h2', etc.)
         heading_hierarchy[tag].append(heading.text.strip())  # Append the heading text
-    
+
     # Calculate keyword density (Placeholder for actual function)
     keyword_density = get_keyword_density(content)
 
@@ -178,7 +179,6 @@ def validate_schema(content):
 
 
 # Set the OpenAI API key
-openai.api_key = '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'
 
 def detect_ai_content(content):
     # Check for AI-like patterns (heuristics)
@@ -193,22 +193,20 @@ def detect_ai_content(content):
 
     try:
         # Suggest rewrite using OpenAI GPT API
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a helpful assistant that rewrites text to sound more human."
-                },
-                {
-                    "role": "user",
-                    "content": f"The following text may be AI-generated. Rewrite it to sound more human: {content}"
-                }
-            ],
-            max_tokens=500,
-            temperature=0.7
-        )
-        human_suggestion = response['choices'][0]['message']['content'].strip()
+        response = client.chat.completions.create(model="gpt-3.5-turbo",
+        messages=[
+            {
+                "role": "system",
+                "content": "You are a helpful assistant that rewrites text to sound more human."
+            },
+            {
+                "role": "user",
+                "content": f"The following text may be AI-generated. Rewrite it to sound more human: {content}"
+            }
+        ],
+        max_tokens=500,
+        temperature=0.7)
+        human_suggestion = response.choices[0].message.content.strip()
     except Exception as e:
         human_suggestion = f"Error generating suggestion: {str(e)}"
 
@@ -295,21 +293,21 @@ def analyze_page_speed(url):
 def check_meta_tags(content):
     # Parse HTML content
     soup = BeautifulSoup(content, 'html.parser')
-    
+
     # Check for meta description and keywords
     meta_desc = soup.find('meta', attrs={'name': 'description'})
     meta_keywords = soup.find('meta', attrs={'name': 'keywords'})
-    
+
     # Extract content text for analysis
     page_text = soup.get_text(separator=' ')
-    
+
     # Analyze content for keyword suggestions
     suggested_keywords = suggest_keywords(page_text)
 
     # Evaluate meta keywords relevance
     existing_keywords = meta_keywords['content'].split(',') if meta_keywords else []
     irrelevant_keywords = [kw for kw in existing_keywords if kw.lower() not in page_text.lower()]
-    
+
     return {
         'meta_description': meta_desc['content'] if meta_desc else None,
         'meta_keywords': existing_keywords if meta_keywords else None,
@@ -321,18 +319,20 @@ def check_meta_tags(content):
 def suggest_keywords(content):
     """
     Suggest relevant keywords based on content using TF-IDF.
+    TF = Term Frequency - Measure of frequently occruing words in a "SPECIFI Doc" making that word important => HIGH TF SCORE
+    IDF = Inverse Document Frequency - Measure of a word across "MANY" document - high occurence make the word LESS important
     """
     # Tokenize content into smaller segments for keyword extraction
     segments = [content[i:i+500] for i in range(0, len(content), 500)]
-    
+
     # Calculate TF-IDF scores for keyword extraction
     vectorizer = TfidfVectorizer(stop_words='english', max_features=10)
     tfidf_matrix = vectorizer.fit_transform(segments)
     feature_names = vectorizer.get_feature_names_out()
-    
+
     # Extract keywords with the highest scores
     keywords = list(feature_names)
-    
+
     return keywords
 
 
