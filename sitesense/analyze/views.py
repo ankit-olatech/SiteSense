@@ -5,7 +5,7 @@ from .models import *
 import requests
 from bs4 import BeautifulSoup
 import json
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 import re
 import os
 # from openai import OpenAI
@@ -77,6 +77,10 @@ def analyze_page(request):
 
         # 6. Blog Optimization
         analysis_results['blog_optimization'] = analyze_blog_optimization(page_content, url)
+
+        # 7. Broken URL Detection
+        analysis_results['detect_broken_urls'] = detect_broken_urls(url)
+
 
 
         return JsonResponse(analysis_results)
@@ -343,25 +347,109 @@ def check_meta_tags(content):
         'suggested_keywords': suggested_keywords
     }
 
+# LESS ACCURATE VERSION
+# def suggest_keywords(content):
+#     """
+#     Suggest relevant keywords based on content using TF-IDF.
+#     TF = Term Frequency - Measure of frequently occruing words in a "SPECIFI Doc" making that word important => HIGH TF SCORE
+#     IDF = Inverse Document Frequency - Measure of a word across "MANY" document - high occurence make the word LESS important
+#     """
+#     # Tokenize content into smaller segments for keyword extraction
+#     segments = [content[i:i+500] for i in range(0, len(content), 500)]
+
+#     # Calculate TF-IDF scores for keyword extraction
+#     vectorizer = TfidfVectorizer(stop_words='english', max_features=10)
+#     tfidf_matrix = vectorizer.fit_transform(segments)
+#     feature_names = vectorizer.get_feature_names_out()
+
+#     # Extract keywords with the highest scores
+#     keywords = list(feature_names)
+
+#     return keywords
+from sklearn.feature_extraction.text import TfidfVectorizer
+import re
 
 def suggest_keywords(content):
     """
     Suggest relevant keywords based on content using TF-IDF.
-    TF = Term Frequency - Measure of frequently occruing words in a "SPECIFI Doc" making that word important => HIGH TF SCORE
-    IDF = Inverse Document Frequency - Measure of a word across "MANY" document - high occurence make the word LESS important
     """
-    # Tokenize content into smaller segments for keyword extraction
-    segments = [content[i:i+500] for i in range(0, len(content), 500)]
+    # Clean and preprocess content
+    content = re.sub(r'[^\w\s]', '', content.lower())  # Remove punctuation and convert to lowercase
 
-    # Calculate TF-IDF scores for keyword extraction
-    vectorizer = TfidfVectorizer(stop_words='english', max_features=10)
-    tfidf_matrix = vectorizer.fit_transform(segments)
+    # Define additional stop words specific to your domain
+    custom_stop_words = {'that', 'your', 'there', 'where', 'what', 'can', 'use', 'like', 'will', 'one', 'make'}
+
+    # Tokenize content into meaningful sentences
+    sentences = re.split(r'(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?)\s', content)
+
+    # Combine 'english' stop words with custom stop words
+    combined_stop_words = set(TfidfVectorizer(stop_words='english').get_stop_words()).union(custom_stop_words)
+
+    # Initialize TfidfVectorizer with the updated stop words
+    vectorizer = TfidfVectorizer(stop_words=list(combined_stop_words), max_features=20)
+
+    # Calculate TF-IDF scores
+    tfidf_matrix = vectorizer.fit_transform(sentences)
     feature_names = vectorizer.get_feature_names_out()
 
-    # Extract keywords with the highest scores
+    # Extract keywords
     keywords = list(feature_names)
 
-    return keywords
+    # Further filter out irrelevant single-character words
+    filtered_keywords = [kw for kw in keywords if len(kw) > 2]
+
+    return filtered_keywords
+
+
+
+def detect_broken_urls(url):
+    """
+    Detect broken URLs in the given page.
+    
+    Parameters:
+        url (str): The URL of the page to analyze.
+    
+    Returns:
+        dict: A dictionary with keys 'broken_urls' and 'valid_urls', each containing a list of URLs.
+    """
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    }
+    
+    try:
+        # Fetch the page content
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()  # Ensure the request was successful
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        # Extract all links
+        links = soup.find_all('a', href=True)
+        all_urls = [urljoin(url, link['href']) for link in links]
+
+        broken_urls = []
+        valid_urls = []
+
+        # Check each URL's status
+        for url in all_urls:
+            try:
+                url_response = requests.head(url, headers=headers, allow_redirects=True, timeout=5)
+                if url_response.status_code < 200 or url_response.status_code >= 300:
+                    broken_urls.append((url, url_response.status_code))
+                else:
+                    valid_urls.append(url)
+            except requests.RequestException as e:
+                broken_urls.append((url, str(e)))
+
+        return {
+            "broken_urls": broken_urls,
+            "valid_urls": valid_urls
+        }
+
+    except requests.RequestException as e:
+        print(f"Error fetching the page: {e}")
+        return {"broken_urls": [], "valid_urls": []}
+
+
 
 
 
@@ -598,6 +686,7 @@ def analyze_blog_optimization(page_content, url):
     }
 
 
+# Change the suggestion style to dynamic for different blog titles
 def generate_suggested_title(current_title, competitor_titles):
     """
     Generate a new blog title based on competitor analysis.
