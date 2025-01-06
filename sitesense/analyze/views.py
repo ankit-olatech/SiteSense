@@ -42,44 +42,57 @@ def analyze_page(request):
 
         # 1. On-Page Optimization Analysis
         analysis_results['on_page_optimization'] = analyze_on_page_optimization(page_content)
+        print("DONE 1")
 
         # 2. H1 Tag Check
         analysis_results['h1_tag'] = analyze_h1_tag(page_content)
+        print("DONE 2")
 
         # 3. Schema Validation
         analysis_results['schema_validation'] = validate_schema(page_content)
+        print("DONE 3")
 
         # 4. AI Content Detection (If Applicable)
         analysis_results['ai_content_detection'] = detect_ai_content(page_content)
+        print("DONE 4")
 
         # 5. Page Speed Analysis
         analysis_results['page_speed'] = analyze_page_speed(url)
+        print("DONE 5")
 
         # 6. Meta Tags and Keyword Suggestions
         analysis_results['meta_tags'] = check_meta_tags(page_content)
+        print("DONE 6")
 
         # ADVANCED FEATURES
 
          # 1. Keyword Summary
         analysis_results['keyword_summary'] = analyze_keyword_summary(page_content)
+        print("DONE 7")
 
         # 2. Anchor Tag Suggestions
         analysis_results['anchor_tags'] = analyze_anchor_tags(page_content)
+        print("DONE 8")
 
         # 3. URL Structure Optimization
         analysis_results['url_structure'] = analyze_url_structure(url)
+        print("DONE 9")
 
         # 4. Robot.txt File Validation
         analysis_results['robots_txt'] = validate_robots_txt(url)
+        print("DONE 10")
 
         # 5. XML Sitemap Validation
         analysis_results['xml_sitemap'] = validate_sitemap(url)
 
+        print("DONE 11")
         # 6. Blog Optimization
         analysis_results['blog_optimization'] = analyze_blog_optimization(page_content, url)
+        print("DONE 12")
 
         # 7. Broken URL Detection
         analysis_results['detect_broken_urls'] = detect_broken_urls(url)
+        print("DONE 13")
 
 
 
@@ -670,6 +683,7 @@ def get_competitor_urls(keywords):
     """
     search_engine_url = "https://www.google.com/search"
     params = {"q": f"{keywords} blog", "num": 5}  # Search query for competitor blogs
+    print(params)
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
     }
