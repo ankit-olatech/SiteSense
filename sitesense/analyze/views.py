@@ -6,7 +6,6 @@ import requests
 from bs4 import BeautifulSoup
 import json
 from urllib.parse import urlparse, urljoin
-import re
 import os
 # from openai import OpenAI
 from openai import OpenAI
@@ -16,7 +15,8 @@ from textstat import flesch_reading_ease
 from sklearn.feature_extraction.text import TfidfVectorizer
 import re
 import nltk
-from nltk.tokenize import sent_tokenize
+from nltk.corpus import stopwords
+from nltk.tokenize import sent_tokenize, word_tokenize
 from collections import Counter
 from heapq import nlargest
 
@@ -485,45 +485,67 @@ def detect_broken_urls(url):
 
 nltk.download('punkt_tab')  # Download tokenizer for sentence splitting
 
+# Initialize stopwords
+stop_words = set(stopwords.words('english'))
+
+def clean_text(text):
+    """Clean text by removing stopwords and non-alphanumeric characters."""
+    words = word_tokenize(text.lower())
+    filtered_words = [word for word in words if word.isalnum() and word not in stop_words and len(word) > 3]
+    return " ".join(filtered_words)
+
 def analyze_keyword_summary(page_content):
     # Parse the HTML content
     soup = BeautifulSoup(page_content, 'html.parser')
     text_content = soup.get_text(separator=" ")
 
-    # Word frequency analysis
-    words = re.findall(r'\w+', text_content.lower())
-    word_freq = {}
-    for word in words:
-        if len(word) > 3:  # Ignore short words
-            word_freq[word] = word_freq.get(word, 0) + 1
+    # Clean the text
+    cleaned_text = clean_text(text_content)
+
+    # TF-IDF analysis for keyword extraction
+    vectorizer = TfidfVectorizer(max_features=10)
+    tfidf_matrix = vectorizer.fit_transform([cleaned_text])
+    feature_names = vectorizer.get_feature_names_out()
+    tfidf_scores = tfidf_matrix.toarray()[0]  # Convert to a list of scores
+    top_keywords = {feature_names[idx]: tfidf_scores[idx] for idx in range(len(feature_names))}
 
     # Total word count
+    words = word_tokenize(cleaned_text)
     total_words = len(words)
-    sorted_keywords = sorted(word_freq.items(), key=lambda x: x[1], reverse=True)[:10]  # Top 10 keywords
 
     # Keyword density analysis
-    keyword_density = {kw: round((count / total_words) * 100, 2) for kw, count in sorted_keywords}
+    keyword_density = {kw: round((freq / total_words) * 100, 2) for kw, freq in top_keywords.items()}
 
     # Summary generation
     sentences = sent_tokenize(text_content)
     sentence_scores = {}
     for sentence in sentences:
-        for word, freq in sorted_keywords:
+        for word in feature_names:
             if word in sentence.lower():
-                sentence_scores[sentence] = sentence_scores.get(sentence, 0) + freq
+                sentence_scores[sentence] = sentence_scores.get(sentence, 0) + 1
 
     # Extract the most relevant sentences (gist)
-    summary_sentences = nlargest(3, sentence_scores, key=sentence_scores.get)
+    summary_sentences = sorted(sentence_scores, key=sentence_scores.get, reverse=True)[:3]
     summary = " ".join(summary_sentences)
 
+    # SEO suggestions
+    seo_suggestions = {
+        "suggested_keywords": list(top_keywords.keys()),
+        "guidelines": [
+            "Include these keywords in the title tag, meta description, and H1 headings.",
+            "Aim for 1-2% keyword density per keyword across the content.",
+            "Use long-tail variations of these keywords for better ranking."
+        ]
+    }
+
     return {
-        "top_keywords": sorted_keywords,
+        "top_keywords": [{"keyword": kw, "score": round(score, 3)} for kw, score in top_keywords.items()],
         "keyword_density": keyword_density,
         "suggested_density": "1-2% per keyword for SEO.",
         "summary": summary,
-        "gist": f"The page discusses topics centered around {', '.join([kw for kw, _ in sorted_keywords[:5]])}."
+        "gist": f"The page discusses topics centered around {', '.join(list(top_keywords.keys())[:5])}.",
+        "seo_suggestions": seo_suggestions
     }
-
 # ---------------------------------
 # 2. Anchor Tag Suggestions
 # ---------------------------------
