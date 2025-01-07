@@ -19,12 +19,15 @@ from nltk.corpus import stopwords
 from nltk.tokenize import sent_tokenize, word_tokenize
 from collections import Counter
 from heapq import nlargest
+import time
 
 # API KEY FOR PAGESPEED
 #  AIzaSyCzMj9hqnN8lSmMIc2vMQZ2mC9N-AcNvcQ 
 def index(request):
     return render(request, 'index.html')
 def analyze_page(request):
+    start_time = time.time()  # Record the start time
+
     if request.method == 'GET':
         url = request.GET.get('url')
 
@@ -58,7 +61,7 @@ def analyze_page(request):
 
         # 5. Page Speed Analysis
         analysis_results['page_speed'] = analyze_page_speed(url)
-        print("DONE 5")
+        print("DONE 5: Time Consuming!")
 
         # 6. Meta Tags and Keyword Suggestions
         analysis_results['meta_tags'] = check_meta_tags(page_content)
@@ -92,11 +95,16 @@ def analyze_page(request):
 
         # 7. Broken URL Detection
         analysis_results['detect_broken_urls'] = detect_broken_urls(url)
-        print("DONE 13")
+        print("DONE 13: Time Consuming!")
+        end_time = time.time()    # Record the end time
+        execution_time = end_time - start_time  # Calculate the difference
+
+        print(f"Execution time: {execution_time} seconds")
 
 
 
         return JsonResponse(analysis_results)
+
 
 # 1. On-Page Optimization
 def analyze_on_page_optimization(content):
@@ -502,34 +510,91 @@ nltk.download('punkt_tab')  # Download tokenizer for sentence splitting
 stop_words = set(stopwords.words('english'))
 
 def clean_text(text):
-    """Clean text by removing stopwords and non-alphanumeric characters."""
-    words = word_tokenize(text.lower())
-    filtered_words = [word for word in words if word.isalnum() and word not in stop_words and len(word) > 3]
-    return " ".join(filtered_words)
+    """
+    Cleans the input text by removing unwanted characters, extra spaces, and stop words.
+    Args:
+        text (str): The raw text to be cleaned.
+    Returns:
+        str: The cleaned text.
+    """
+    # Convert to lowercase
+    text = text.lower()
+
+    # Remove URLs
+    text = re.sub(r'http\S+|www\S+|https\S+', '', text, flags=re.MULTILINE)
+
+    # Remove HTML tags
+    text = re.sub(r'<.*?>', '', text)
+
+    # Remove special characters and numbers
+    text = re.sub(r'[^a-z\s]', '', text)
+
+    # Remove extra spaces
+    text = re.sub(r'\s+', ' ', text).strip()
+
+    # Tokenize text
+    words = word_tokenize(text)
+
+    # Remove stop words
+    stop_words = set(stopwords.words('english'))
+    filtered_words = [word for word in words if word not in stop_words]
+
+    # Join the filtered words back into a single string
+    cleaned_text = ' '.join(filtered_words)
+
+    return cleaned_text
+# If TF-IDF Fails
+def fallback_keyword_extraction(cleaned_text):
+    """
+    Extract keywords based on word frequency as a fallback.
+    Args:
+        cleaned_text (str): The cleaned text.
+    Returns:
+        dict: Top keywords by frequency.
+    """
+    words = cleaned_text.split()
+    word_counts = Counter(words)
+    return dict(word_counts.most_common(5))
 
 def analyze_keyword_summary(page_content):
-    # Parse the HTML content
+    # Parse and clean HTML content
     soup = BeautifulSoup(page_content, 'html.parser')
     text_content = soup.get_text(separator=" ")
-
-    # Clean the text
     cleaned_text = clean_text(text_content)
+    
+    if not cleaned_text or len(cleaned_text.split()) < 5:
+        return {"error": "Insufficient text for meaningful analysis."}
 
-    # TF-IDF analysis for keyword extraction
-    vectorizer = TfidfVectorizer(max_features=10)
-    tfidf_matrix = vectorizer.fit_transform([cleaned_text])
-    feature_names = vectorizer.get_feature_names_out()
-    tfidf_scores = tfidf_matrix.toarray()[0]  # Convert to a list of scores
-    top_keywords = {feature_names[idx]: tfidf_scores[idx] for idx in range(len(feature_names))}
+    try:
+        # Initialize TF-IDF Vectorizer with dynamic thresholds
+        vectorizer = TfidfVectorizer(
+            max_features=10,  # Limit to top 10 features
+            stop_words=stopwords.words('english'),  # Remove common stop words
+            max_df=0.85,  # Adjust upper threshold
+            min_df=1  # Terms must appear at least once
+        )
+        tfidf_matrix = vectorizer.fit_transform([cleaned_text])
 
-    # Total word count
-    words = word_tokenize(cleaned_text)
-    total_words = len(words)
+        # Extract feature names and scores
+        feature_names = vectorizer.get_feature_names_out()
+        tfidf_scores = tfidf_matrix.toarray()[0]
 
-    # Keyword density analysis
-    keyword_density = {kw: round((freq / total_words) * 100, 2) for kw, freq in top_keywords.items()}
+        # Rank keywords by score
+        top_keywords = {feature_names[idx]: tfidf_scores[idx] for idx in range(len(feature_names))}
 
-    # Summary generation
+    except ValueError as e:
+        # Fallback to frequency-based keywords in case of error
+        keyword_freq = Counter(word_tokenize(cleaned_text))
+        top_keywords = dict(keyword_freq.most_common(10))
+        feature_names = list(top_keywords.keys())
+
+    # Total word count and keyword density
+    total_words = len(word_tokenize(cleaned_text))
+    keyword_density = {
+        kw: round((keyword_freq[kw] / total_words) * 100, 2) for kw in feature_names
+    }
+
+    # Generate summary
     sentences = sent_tokenize(text_content)
     sentence_scores = {}
     for sentence in sentences:
@@ -537,13 +602,22 @@ def analyze_keyword_summary(page_content):
             if word in sentence.lower():
                 sentence_scores[sentence] = sentence_scores.get(sentence, 0) + 1
 
-    # Extract the most relevant sentences (gist)
     summary_sentences = sorted(sentence_scores, key=sentence_scores.get, reverse=True)[:3]
     summary = " ".join(summary_sentences)
 
-    # SEO suggestions
+    # Dynamic SEO suggestions
+    seo_keywords = []
+    for kw in feature_names[:5]:  # Top 5 keywords
+        seo_keywords.extend([
+            f"How to master {kw}",
+            f"Top {kw} tools for 2025",
+            f"Best {kw} strategies",
+            f"Guide to {kw} success",
+            f"{kw} optimization techniques"
+        ])
+
     seo_suggestions = {
-        "suggested_keywords": list(top_keywords.keys()),
+        "suggested_keywords": seo_keywords,
         "guidelines": [
             "Include these keywords in the title tag, meta description, and H1 headings.",
             "Aim for 1-2% keyword density per keyword across the content.",
@@ -559,6 +633,8 @@ def analyze_keyword_summary(page_content):
         "gist": f"The page discusses topics centered around {', '.join(list(top_keywords.keys())[:5])}.",
         "seo_suggestions": seo_suggestions
     }
+
+
 # ---------------------------------
 # 2. Anchor Tag Suggestions
 # ---------------------------------
