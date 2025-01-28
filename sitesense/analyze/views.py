@@ -161,47 +161,7 @@ def analyze_h1_tag(content):
         'title_vs_h1': h1_text == title_text  # Basic check for title-H1 consistency
     }
 
-# 3. Schema Validation
-# def validate_schema(content):
-#     soup = BeautifulSoup(content, 'html.parser')
-#     schema_data = soup.find_all('script', type='application/ld+json')
-#     schemas = []
-#     recommendations = []
 
-#     for item in schema_data:
-#         try:
-#             schema = json.loads(item.string)
-#             schemas.append(schema)
-
-#             # Check for common schema types
-#             schema_type = schema.get('@type', None)
-#             if schema_type:
-#                 # Suggestions for improvement
-#                 if schema_type == "Product" and "offers" not in schema:
-#                     recommendations.append("Add 'offers' property to the Product schema for pricing details.")
-#                 if schema_type == "Article" and "author" not in schema:
-#                     recommendations.append("Add 'author' property to the Article schema for attribution.")
-#                 if schema_type == "Review" and "reviewRating" not in schema:
-#                     recommendations.append("Include 'reviewRating' in Review schema for better user insights.")
-#             else:
-#                 recommendations.append("Schema type is missing. Add '@type' to define the schema's purpose.")
-
-#         except json.JSONDecodeError:
-#             recommendations.append("Invalid JSON-LD detected. Fix formatting issues.")
-
-#     # Detect Missing Schema Types
-#     if not schema_data:
-#         recommendations.append("No schema markup detected. Add appropriate schema types like Product, Article, or Review based on page content.")
-#     else:
-#         if not any(schema.get('@type') == "BreadcrumbList" for schema in schemas):
-#             recommendations.append("Add 'BreadcrumbList' schema to improve navigation.")
-#         if not any(schema.get('@type') == "Organization" for schema in schemas):
-#             recommendations.append("Add 'Organization' schema to provide details about the website owner.")
-
-#     return {
-#         "schemas_detected": schemas,
-#         "recommendations": recommendations
-#     }
 def validate_schema(page_content):
     """
     Validates schema.org structured data in the page content.
@@ -269,38 +229,6 @@ def detect_ai_content(content):
         "readability_score": readability_score,
         "human_suggestion": human_suggestion
     }
-# def detect_ai_content(content):
-#     # Check for AI-like patterns (heuristics)
-#     ai_detected = 'AI content' in content  # Simple placeholder logic for AI markers
-#     readability_score = flesch_reading_ease(content)
-
-#     try:
-#         # Suggest rewrite using OpenAI GPT API
-#         openai.api_key = "your-api-key-here"
-#         response = openai.ChatCompletion.create(
-#             model="gpt-3.5-turbo",
-#             messages=[
-#                 {
-#                     "role": "system",
-#                     "content": "You are a helpful assistant that rewrites text to sound more human."
-#                 },
-#                 {
-#                     "role": "user",
-#                     "content": f"The following text may be AI-generated. Rewrite it to sound more human: {content}"
-#                 }
-#             ],
-#             max_tokens=500,
-#             temperature=0.7
-#         )
-#         human_suggestion = response['choices'][0]['message']['content'].strip()
-#     except Exception as e:
-#         human_suggestion = f"Error generating suggestion: {str(e)}"
-
-#     return {
-#         "ai_detected": ai_detected or readability_score < 50,
-#         "readability_score": readability_score,
-#         "human_suggestion": human_suggestion
-#     }
 
 # 5. Page Speed Analysis
 def analyze_page_speed(url):
@@ -332,16 +260,6 @@ def analyze_page_speed(url):
     except Exception as e:
         return {"error": f"Failed to fetch page speed: {str(e)}"}
 
-# 6. Meta Tags and Keyword Suggestions
-# def check_meta_tags(content):
-#     soup = BeautifulSoup(content, 'html.parser')
-#     meta_desc = soup.find('meta', attrs={'name': 'description'})
-#     meta_keywords = soup.find('meta', attrs={'name': 'keywords'})
-
-#     return {
-#         'meta_description': meta_desc['content'] if meta_desc else None,
-#         'meta_keywords': meta_keywords['content'] if meta_keywords else None
-#     }
 
 
 def check_meta_tags(content):
@@ -369,25 +287,7 @@ def check_meta_tags(content):
         'suggested_keywords': suggested_keywords
     }
 
-# LESS ACCURATE VERSION
-# def suggest_keywords(content):
-#     """
-#     Suggest relevant keywords based on content using TF-IDF.
-#     TF = Term Frequency - Measure of frequently occruing words in a "SPECIFI Doc" making that word important => HIGH TF SCORE
-#     IDF = Inverse Document Frequency - Measure of a word across "MANY" document - high occurence make the word LESS important
-#     """
-#     # Tokenize content into smaller segments for keyword extraction
-#     segments = [content[i:i+500] for i in range(0, len(content), 500)]
 
-#     # Calculate TF-IDF scores for keyword extraction
-#     vectorizer = TfidfVectorizer(stop_words='english', max_features=10)
-#     tfidf_matrix = vectorizer.fit_transform(segments)
-#     feature_names = vectorizer.get_feature_names_out()
-
-#     # Extract keywords with the highest scores
-#     keywords = list(feature_names)
-
-#     return keywords
 from sklearn.feature_extraction.text import TfidfVectorizer
 import re
 
@@ -421,55 +321,6 @@ def suggest_keywords(content):
     filtered_keywords = [kw for kw in keywords if len(kw) > 2]
 
     return filtered_keywords
-
-
-
-# def detect_broken_urls(url):
-#     """
-#     Detect broken URLs in the given page.
-    
-#     Parameters:
-#         url (str): The URL of the page to analyze.
-    
-#     Returns:
-#         dict: A dictionary with keys 'broken_urls' and 'valid_urls', each containing a list of URLs.
-#     """
-#     headers = {
-#         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-#     }
-    
-#     try:
-#         # Fetch the page content
-#         response = requests.get(url, headers=headers)
-#         response.raise_for_status()  # Ensure the request was successful
-#         soup = BeautifulSoup(response.text, 'html.parser')
-
-#         # Extract all links
-#         links = soup.find_all('a', href=True)
-#         all_urls = [urljoin(url, link['href']) for link in links]
-
-#         broken_urls = []
-#         valid_urls = []
-
-#         # Check each URL's status
-#         for url in all_urls:
-#             try:
-#                 url_response = requests.head(url, headers=headers, allow_redirects=True, timeout=5)
-#                 if url_response.status_code < 200 or url_response.status_code >= 300:
-#                     broken_urls.append((url, url_response.status_code))
-#                 else:
-#                     valid_urls.append(url)
-#             except requests.RequestException as e:
-#                 broken_urls.append((url, str(e)))
-
-#         return {
-#             "broken_urls": broken_urls,
-#             "valid_urls": valid_urls
-#         }
-
-#     except requests.RequestException as e:
-#         print(f"Error fetching the page: {e}")
-#         return {"broken_urls": [], "valid_urls": []}
 
 
 
@@ -536,33 +387,6 @@ def detect_broken_urls(url, max_threads=10):
 
 
 
-
-# ADVANCVED FEATURES
-# ---------------------------------
-# 1. Keyword Summary
-# ---------------------------------
-# def analyze_keyword_summary(page_content):
-#     soup = BeautifulSoup(page_content, 'html.parser')
-#     text_content = soup.get_text()
-
-#     # Count words and extract keywords
-#     words = re.findall(r'\w+', text_content.lower())
-#     word_freq = {}
-#     for word in words:
-#         if len(word) > 3:  # Ignore short words
-#             word_freq[word] = word_freq.get(word, 0) + 1
-
-#     total_words = len(words)
-#     sorted_keywords = sorted(word_freq.items(), key=lambda x: x[1], reverse=True)[:10]  # Top 10 keywords
-
-#     # Keyword density analysis
-#     keyword_density = {kw: round((count / total_words) * 100, 2) for kw, count in sorted_keywords}
-
-#     return {
-#         "top_keywords": sorted_keywords,
-#         "keyword_density": keyword_density,
-#         "suggested_density": "1-2% per keyword for SEO."
-#     }
 
 # 1.1 Page SUmmary
 
