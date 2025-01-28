@@ -597,7 +597,9 @@ def validate_sitemap(url):
 
 
 
-
+# ---------------------------------
+# 6. Blog Optimization
+# ---------------------------------
 
 # Download NLTK stopwords
 nltk.download('stopwords')
@@ -710,8 +712,7 @@ def analyze_blog_optimization(page_content, url):
     for h1 in h1_tags:
         # Perform Google search for the H1 tag
         query = f"{h1} blog"
-        search_results = list(search(query, num=5, stop=5, pause=2))
-        
+        search_results = search(query, num_results=5, lang="en", sleep_interval=2)    # Fetch top 5 results, 2sec interval to avoid getting blocked    
         # Fetch titles from the search results
         for result_url in search_results:
             if url not in result_url:  # Exclude the base URL
@@ -734,7 +735,6 @@ def analyze_blog_optimization(page_content, url):
         "google_suggested_titles": suggested_titles,
         "summary": "Add keyword-rich blog titles and ensure H1 tags match content."
     }
-
 
 # # Example usage
 # if __name__ == "__main__":
