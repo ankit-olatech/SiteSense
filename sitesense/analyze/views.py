@@ -20,6 +20,7 @@ from nltk.tokenize import sent_tokenize, word_tokenize
 from collections import Counter
 from heapq import nlargest
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 # API KEY FOR PAGESPEED
 #  AIzaSyCzMj9hqnN8lSmMIc2vMQZ2mC9N-AcNvcQ 
@@ -423,12 +424,62 @@ def suggest_keywords(content):
 
 
 
-def detect_broken_urls(url):
+# def detect_broken_urls(url):
+#     """
+#     Detect broken URLs in the given page.
+    
+#     Parameters:
+#         url (str): The URL of the page to analyze.
+    
+#     Returns:
+#         dict: A dictionary with keys 'broken_urls' and 'valid_urls', each containing a list of URLs.
+#     """
+#     headers = {
+#         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+#     }
+    
+#     try:
+#         # Fetch the page content
+#         response = requests.get(url, headers=headers)
+#         response.raise_for_status()  # Ensure the request was successful
+#         soup = BeautifulSoup(response.text, 'html.parser')
+
+#         # Extract all links
+#         links = soup.find_all('a', href=True)
+#         all_urls = [urljoin(url, link['href']) for link in links]
+
+#         broken_urls = []
+#         valid_urls = []
+
+#         # Check each URL's status
+#         for url in all_urls:
+#             try:
+#                 url_response = requests.head(url, headers=headers, allow_redirects=True, timeout=5)
+#                 if url_response.status_code < 200 or url_response.status_code >= 300:
+#                     broken_urls.append((url, url_response.status_code))
+#                 else:
+#                     valid_urls.append(url)
+#             except requests.RequestException as e:
+#                 broken_urls.append((url, str(e)))
+
+#         return {
+#             "broken_urls": broken_urls,
+#             "valid_urls": valid_urls
+#         }
+
+#     except requests.RequestException as e:
+#         print(f"Error fetching the page: {e}")
+#         return {"broken_urls": [], "valid_urls": []}
+
+
+
+def detect_broken_urls(url, max_threads=10):
     """
-    Detect broken URLs in the given page.
+    Detect broken URLs in the given page using concurrent requests.
     
     Parameters:
         url (str): The URL of the page to analyze.
+        max_threads (int): The maximum number of threads for parallel processing.
     
     Returns:
         dict: A dictionary with keys 'broken_urls' and 'valid_urls', each containing a list of URLs.
@@ -436,30 +487,42 @@ def detect_broken_urls(url):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
     }
-    
+
+    def is_broken(link):
+        """Helper function to check if a URL is broken."""
+        try:
+            response = requests.head(link, headers=headers, allow_redirects=True, timeout=5)
+            if response.status_code < 200 or response.status_code >= 300:
+                return (link, response.status_code)  # Broken URL
+            return (link, None)  # Valid URL
+        except requests.RequestException as e:
+            return (link, str(e))  # Broken URL with error message
+
     try:
         # Fetch the page content
         response = requests.get(url, headers=headers)
         response.raise_for_status()  # Ensure the request was successful
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        # Extract all links
+        # Extract all links and resolve relative URLs
         links = soup.find_all('a', href=True)
-        all_urls = [urljoin(url, link['href']) for link in links]
+        all_urls = list(set(urljoin(url, link['href']) for link in links))  # Deduplicate URLs
 
+        # Filter only http(s) links
+        valid_links = [link for link in all_urls if urlparse(link).scheme in ['http', 'https']]
+
+        # Check URLs concurrently
         broken_urls = []
         valid_urls = []
 
-        # Check each URL's status
-        for url in all_urls:
-            try:
-                url_response = requests.head(url, headers=headers, allow_redirects=True, timeout=5)
-                if url_response.status_code < 200 or url_response.status_code >= 300:
-                    broken_urls.append((url, url_response.status_code))
-                else:
-                    valid_urls.append(url)
-            except requests.RequestException as e:
-                broken_urls.append((url, str(e)))
+        with ThreadPoolExecutor(max_threads) as executor:
+            results = list(executor.map(is_broken, valid_links))
+        
+        for link, error in results:
+            if error:
+                broken_urls.append((link, error))
+            else:
+                valid_urls.append(link)
 
         return {
             "broken_urls": broken_urls,
@@ -469,7 +532,6 @@ def detect_broken_urls(url):
     except requests.RequestException as e:
         print(f"Error fetching the page: {e}")
         return {"broken_urls": [], "valid_urls": []}
-
 
 
 
@@ -712,8 +774,10 @@ def validate_sitemap(url):
 # ---------------------------------
 # 6. Blog Optimization
 # ---------------------------------
+nltk.download('stopwords')
 
 def get_competitor_urls(keywords):
+    
     """
     Dynamically fetch competitor blog URLs using a search query.
     """
@@ -737,21 +801,6 @@ def get_competitor_urls(keywords):
         print(f"Error fetching competitor URLs: {e}")
         return []
 
-def extract_main_keywords(text_content):
-    """
-    Extract main keywords from the text content using regex or basic frequency analysis.
-    """
-    words = re.findall(r'\b\w+\b', text_content.lower())
-    stopwords = set(["the", "and", "is", "in", "to", "for", "of", "a", "on", "with", "by", "an", "as"])
-    keyword_freq = {}
-
-    for word in words:
-        if word not in stopwords:
-            keyword_freq[word] = keyword_freq.get(word, 0) + 1
-
-    # Return top 5 most frequent words as keywords
-    sorted_keywords = sorted(keyword_freq, key=keyword_freq.get, reverse=True)
-    return " ".join(sorted_keywords[:5])
 
 def get_competitor_urls(keywords):
     """
@@ -782,7 +831,7 @@ def extract_main_keywords(text_content):
     Extract main keywords from the text content using regex or basic frequency analysis.
     """
     words = re.findall(r'\b\w+\b', text_content.lower())
-    stopwords = set(["the", "and", "is", "in", "to", "for", "of", "a", "on", "with", "by", "an", "as"])
+    stopwords = set(["the", "and", "is", "in", "to", "for", "of", "a", "on", "with", "by", "an", "as", "your", "you"])
     keyword_freq = {}
 
     for word in words:
