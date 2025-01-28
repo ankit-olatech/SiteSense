@@ -15,6 +15,7 @@ cymem==2.0.10
 distro==1.9.0
 Django==5.1.4
 en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl#sha256=1932429db727d4bff3deed6b34cfc05df17794f4a52eeb26cf8928f7c1a0fb85
+googlesearch-python==1.3.0
 h11==0.14.0
 httpcore==1.0.7
 httpx==0.28.1

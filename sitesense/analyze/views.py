@@ -21,6 +21,7 @@ from collections import Counter
 from heapq import nlargest
 import time
 from concurrent.futures import ThreadPoolExecutor
+from googlesearch import search
 
 # API KEY FOR PAGESPEED
 #  AIzaSyCzMj9hqnN8lSmMIc2vMQZ2mC9N-AcNvcQ 
@@ -595,44 +596,18 @@ def validate_sitemap(url):
         return {"error": f"Failed to check sitemap: {str(e)}"}
 
 
-# ---------------------------------
-# 6. Blog Optimization
-# ---------------------------------
+
+
+
+# Download NLTK stopwords
 nltk.download('stopwords')
 
 def get_competitor_urls(keywords):
-    
     """
     Dynamically fetch competitor blog URLs using a search query.
     """
     search_engine_url = "https://www.google.com/search"
     params = {"q": f"{keywords} blog", "num": 5}  # Search query for competitor blogs
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    }
-
-    try:
-        response = requests.get(search_engine_url, params=params, headers=headers)
-        soup = BeautifulSoup(response.text, 'html.parser')
-        # Parse search result URLs using the updated structure
-        links = []
-        for result in soup.select('.tF2Cxc a'):  # Adjusted selector for Google results
-            href = result.get("href")
-            if href:
-                links.append(href)
-        return links[:5]  # Return top 5 results
-    except Exception as e:
-        print(f"Error fetching competitor URLs: {e}")
-        return []
-
-
-def get_competitor_urls(keywords):
-    """
-    Dynamically fetch competitor blog URLs using a search query.
-    """
-    search_engine_url = "https://www.google.com/search"
-    params = {"q": f"{keywords} blog", "num": 5}  # Search query for competitor blogs
-    print(params)
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
     }
@@ -649,13 +624,14 @@ def get_competitor_urls(keywords):
     except Exception as e:
         print(f"Error fetching competitor URLs: {e}")
         return []
+
 
 def extract_main_keywords(text_content):
     """
     Extract main keywords from the text content using regex or basic frequency analysis.
     """
     words = re.findall(r'\b\w+\b', text_content.lower())
-    stopwords = set(["the", "and", "is", "in", "to", "for", "of", "a", "on", "with", "by", "an", "as", "your", "you"])
+    stopwords = set(nltk.corpus.stopwords.words('english'))  # Use NLTK stopwords
     keyword_freq = {}
 
     for word in words:
@@ -729,17 +705,44 @@ def analyze_blog_optimization(page_content, url):
     # Filter competitor titles to exclude references to the target domain
     filtered_titles = filter_competitor_titles(competitor_titles, url)
 
-    # Generate a suggested blog title
-    suggested_title = generate_suggested_title(title, filtered_titles)
+    # Generate a suggested blog title based on H1 tag and Google search
+    suggested_titles = []
+    for h1 in h1_tags:
+        # Perform Google search for the H1 tag
+        query = f"{h1} blog"
+        search_results = list(search(query, num=5, stop=5, pause=2))
+        
+        # Fetch titles from the search results
+        for result_url in search_results:
+            if url not in result_url:  # Exclude the base URL
+                try:
+                    response = requests.get(result_url, timeout=5)
+                    result_soup = BeautifulSoup(response.text, 'html.parser')
+                    result_title = result_soup.find('title').get_text(strip=True) if result_soup.find('title') else "No title"
+                    suggested_titles.append(result_title)
+                except Exception as e:
+                    suggested_titles.append(f"Error fetching {result_url}: {e}")
+
+    # Generate a suggested title based on the top results
+    suggested_title = generate_suggested_title(title, suggested_titles)
 
     return {
         "current_title": title,
         "h1_tags": h1_tags,
         "suggested_title": suggested_title,
         "competitor_titles": filtered_titles,
+        "google_suggested_titles": suggested_titles,
         "summary": "Add keyword-rich blog titles and ensure H1 tags match content."
     }
 
+
+# # Example usage
+# if __name__ == "__main__":
+#     # Replace with your blog's URL and content
+#     blog_url = "https://example.com/blog"
+#     blog_content = requests.get(blog_url).text
+#     result = analyze_blog_optimization(blog_content, blog_url)
+#     print(result)
 
 # USING GOOGLE JSON API- excluding scraping style
 # from googleapiclient.discovery import build
