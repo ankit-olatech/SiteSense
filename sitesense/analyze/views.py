@@ -20,7 +20,8 @@ from nltk.tokenize import sent_tokenize, word_tokenize
 from collections import Counter
 from heapq import nlargest
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from googlesearch import search
 from transformers import T5ForConditionalGeneration, T5Tokenizer
 # API KEY FOR PAGESPEED
@@ -28,85 +29,92 @@ from transformers import T5ForConditionalGeneration, T5Tokenizer
 def index(request):
     return render(request, 'index.html')
 def analyze_page(request):
+
     start_time = time.time()  # Record the start time
 
+
     if request.method == 'GET':
+
         url = request.GET.get('url')
 
+
         if not url:
+
             return JsonResponse({"error": "URL is required."})
 
+
         # Fetch the page content
+
         try:
+
             response = requests.get(url)
+
             page_content = response.text
+
         except Exception as e:
+
             return JsonResponse({"error": f"Failed to fetch the page: {str(e)}"})
+
 
         analysis_results = {}
 
-        # 1. On-Page Optimization Analysis
-        analysis_results['on_page_optimization'] = analyze_on_page_optimization(page_content)
-        print("DONE 1")
 
-        # 2. H1 Tag Check
-        analysis_results['h1_tag'] = analyze_h1_tag(page_content)
-        print("DONE 2")
+        # Use ThreadPoolExecutor to run analyses in parallel
 
-        # 3. Schema Validation
-        analysis_results['schema_validation'] = validate_schema(page_content)
-        print("DONE 3")
+        with ThreadPoolExecutor() as executor:
 
-        # 4. AI Content Detection (If Applicable)
-        analysis_results['ai_content_detection'] = detect_ai_content(page_content)
-        print("DONE 4")
+            future_to_analysis = {
 
-        # 5. Page Speed Analysis
-        analysis_results['page_speed'] = analyze_page_speed(url)
-        print("DONE 5: Time Consuming!")
+                executor.submit(analyze_on_page_optimization, page_content): 'on_page_optimization',
 
-        # 6. Meta Tags and Keyword Suggestions
-        analysis_results['meta_tags'] = check_meta_tags(page_content)
-        print("DONE 6")
+                executor.submit(analyze_h1_tag, page_content): 'h1_tag',
 
-        # ADVANCED FEATURES
+                executor.submit(validate_schema, page_content): 'schema_validation',
 
-         # 1. Keyword Summary
-        analysis_results['keyword_summary'] = analyze_keyword_summary(page_content)
-        print("DONE 7")
+                executor.submit(detect_ai_content, page_content): 'ai_content_detection',
 
-        # 2. Anchor Tag Suggestions
-        analysis_results['anchor_tags'] = analyze_anchor_tags(page_content)
-        print("DONE 8")
+                executor.submit(analyze_page_speed, url): 'page_speed',
 
-        # 3. URL Structure Optimization
-        analysis_results['url_structure'] = analyze_url_structure(url)
-        print("DONE 9")
+                executor.submit(check_meta_tags, page_content): 'meta_tags',
 
-        # 4. Robot.txt File Validation
-        analysis_results['robots_txt'] = validate_robots_txt(url)
-        print("DONE 10")
+                executor.submit(analyze_keyword_summary, page_content): 'keyword_summary',
 
-        # 5. XML Sitemap Validation
-        analysis_results['xml_sitemap'] = validate_sitemap(url)
+                executor.submit(analyze_anchor_tags, page_content): 'anchor_tags',
 
-        print("DONE 11")
-        # 6. Blog Optimization
-        analysis_results['blog_optimization'] = analyze_blog_optimization(page_content, url)
-        print("DONE 12")
+                executor.submit(analyze_url_structure, url): 'url_structure',
 
-        # 7. Broken URL Detection
-        analysis_results['detect_broken_urls'] = detect_broken_urls(url)
-        print("DONE 13: Time Consuming!")
-        end_time = time.time()    # Record the end time
+                executor.submit(validate_robots_txt, url): 'robots_txt',
+
+                executor.submit(validate_sitemap, url): 'xml_sitemap',
+
+                executor.submit(analyze_blog_optimization, page_content, url): 'blog_optimization',
+
+                executor.submit(detect_broken_urls, url): 'detect_broken_urls'
+
+            }
+
+
+            for future in as_completed(future_to_analysis):
+
+                analysis_name = future_to_analysis[future]
+
+                try:
+
+                    analysis_results[analysis_name] = future.result()
+
+                except Exception as e:
+
+                    analysis_results[analysis_name] = {"error": str(e)}
+
+
+        end_time = time.time()  # Record the end time
+
         execution_time = end_time - start_time  # Calculate the difference
+
 
         print(f"Execution time: {execution_time} seconds")
 
-
-
         return JsonResponse(analysis_results)
-
 
 # 1. On-Page Optimization
 def analyze_on_page_optimization(content):
