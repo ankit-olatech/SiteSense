@@ -29,60 +29,93 @@ from transformers import T5ForConditionalGeneration, T5Tokenizer
 def index(request):
     return render(request, 'index.html')
 def analyze_page(request):
-    start_time = time.time()
+
+    start_time = time.time()  # Record the start time
+
 
     if request.method == 'GET':
+
         url = request.GET.get('url')
+
+
         if not url:
+
             return JsonResponse({"error": "URL is required."})
 
+
+        # Fetch the page content
+
         try:
+
             response = requests.get(url)
+
             page_content = response.text
+
         except Exception as e:
+
             return JsonResponse({"error": f"Failed to fetch the page: {str(e)}"})
 
-        analysis_results = {}
-        futures = []
 
-        # Use ThreadPoolExecutor with a timeout
-        with ThreadPoolExecutor(max_workers=5) as executor:  # Limit workers
+        analysis_results = {}
+
+
+        # Use ThreadPoolExecutor to run analyses in parallel
+
+        with ThreadPoolExecutor() as executor:
+
             future_to_analysis = {
+
                 executor.submit(analyze_on_page_optimization, page_content): 'on_page_optimization',
+
                 executor.submit(analyze_h1_tag, page_content): 'h1_tag',
+
                 executor.submit(validate_schema, page_content): 'schema_validation',
+
                 executor.submit(detect_ai_content, page_content): 'ai_content_detection',
+
                 executor.submit(analyze_page_speed, url): 'page_speed',
+
                 executor.submit(check_meta_tags, page_content): 'meta_tags',
+
                 executor.submit(analyze_keyword_summary, page_content): 'keyword_summary',
+
                 executor.submit(analyze_anchor_tags, page_content): 'anchor_tags',
+
                 executor.submit(analyze_url_structure, url): 'url_structure',
+
                 executor.submit(validate_robots_txt, url): 'robots_txt',
+
                 executor.submit(validate_sitemap, url): 'xml_sitemap',
+
                 executor.submit(analyze_blog_optimization, page_content, url): 'blog_optimization',
+
                 executor.submit(detect_broken_urls, url): 'detect_broken_urls'
+
             }
 
-            # Wait for all futures to complete with a timeout
-            try:
-                for future in as_completed(future_to_analysis.keys(), timeout=30):  # 30 second timeout
-                    analysis_name = future_to_analysis[future]
-                    try:
-                        analysis_results[analysis_name] = future.result()
-                    except Exception as e:
-                        analysis_results[analysis_name] = {"error": str(e)}
-            except TimeoutError:
-                # Handle unfinished tasks
-                for analysis_name, future in future_to_analysis.items():
-                    if not future.done():
-                        analysis_results[analysis_name] = {"error": "Analysis timed out"}
 
-        end_time = time.time()
-        execution_time = end_time - start_time
+            for future in as_completed(future_to_analysis):
+
+                analysis_name = future_to_analysis[future]
+
+                try:
+
+                    analysis_results[analysis_name] = future.result()
+
+                except Exception as e:
+
+                    analysis_results[analysis_name] = {"error": str(e)}
+
+
+        end_time = time.time()  # Record the end time
+
+        execution_time = end_time - start_time  # Calculate the difference
+
+
         print(f"Execution time: {execution_time} seconds")
 
         return JsonResponse(analysis_results)
-    
+
 # 1. On-Page Optimization
 def analyze_on_page_optimization(content):
     soup = BeautifulSoup(content, 'html.parser')
