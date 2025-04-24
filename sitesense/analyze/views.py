@@ -30,7 +30,6 @@ def index(request):
     return render(request, 'index.html')
 def analyze_page(request):
 
-    start_time = time.time()  # Record the start time
 
 
     if request.method == 'GET':
@@ -107,12 +106,6 @@ def analyze_page(request):
                     analysis_results[analysis_name] = {"error": str(e)}
 
 
-        end_time = time.time()  # Record the end time
-
-        execution_time = end_time - start_time  # Calculate the difference
-
-
-        print(f"Execution time: {execution_time} seconds")
 
         return JsonResponse(analysis_results)
 
