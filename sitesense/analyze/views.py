@@ -1,4 +1,3 @@
-# YOU ARE AN SEO EXPERT
 
 from django.http import JsonResponse
 from django.shortcuts import render
