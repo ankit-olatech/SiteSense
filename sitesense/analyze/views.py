@@ -1,1143 +1,1238 @@
+# YOU ARE AN SEO EXPERT
+
 from django.http import JsonResponse
 from django.shortcuts import render
-# --- Removed OpenAI ---
-# from openai import OpenAI
-from rake_nltk import Rake
-# from pypsrp import FEATURES # Assuming this is not used elsewhere
-# from .models import * # Assuming models are not directly used in this snippet
+# Removed unused import: from pypsrp import FEATURES
+# Removed unused import: from .models import * # Assuming models aren't used in this specific view
 import requests
-from bs4 import BeautifulSoup, Comment # Added Comment
+from bs4 import BeautifulSoup
 import json
 from urllib.parse import urlparse, urljoin
 import os
+from openai import OpenAI # Keep if needed elsewhere, but not used in provided functions
+# client = OpenAI(api_key='YOUR_SECURE_API_KEY') # Use environment variables for keys!
+
 from textstat import flesch_reading_ease
-from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
+from sklearn.feature_extraction.text import TfidfVectorizer
 import re
 import nltk
 from nltk.corpus import stopwords
-from nltk.stem import WordNetLemmatizer # Added Lemmatizer
 from nltk.tokenize import sent_tokenize, word_tokenize
+from nltk import ngrams # For keyword phrase extraction
 from collections import Counter
-from heapq import nlargest
+# Removed unused import: from heapq import nlargest # Replaced with Counter.most_common
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import string
 
-# --- Removed Transformers ---
-# from transformers import T5ForConditionalGeneration, T5Tokenizer
+# Removed unreliable scraping: from googlesearch import search
+from transformers import T5ForConditionalGeneration, T5Tokenizer # For AI detection
 
-# --- Removed googlesearch (Used in blog optimization, keep if that feature is essential) ---
-# from googlesearch import search
-
-
-# Ensure NLTK data is available
+# --- NLTK Data Downloads (Ensure these run successfully) ---
+# It's better to run these once during setup/deployment
 try:
-
-    nltk.data.find('corpora/wordnet')
-
-except LookupError:
-
-    nltk.download('wordnet')
-
-
-try:
-
     nltk.data.find('tokenizers/punkt')
-
-except LookupError:
-
+except nltk.downloader.DownloadError:
     nltk.download('punkt')
-
-
 try:
-
     nltk.data.find('corpora/stopwords')
-
-except LookupError:
-
+except nltk.downloader.DownloadError:
     nltk.download('stopwords')
+# -----------------------------------------------------------
 
 # --- Constants ---
-# API KEY FOR PAGESPEED (Keep as is)
-PAGESPEED_API_KEY = 'AIzaSyCzMj9hqnN8lSmMIc2vMQZ2mC9N-AcNvcQ' # Use a constant
-
-# Extended Stopwords
-CUSTOM_STOP_WORDS = {
-    'http', 'https', 'www', 'com', 'org', 'net', 'gov', 'edu', 'like', 'get', 'use',
-    'also', 'said', 'could', 'would', 'should', 'make', 'one', 'two', 'see', 'may',
-    'might', 'well', 'good', 'great', 'page', 'site', 'website', 'click', 'here',
-    'learn', 'more', 'find', 'out', 'read', 'content', 'information', 'visit',
-    'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august',
-    'september', 'october', 'november', 'december', 'privacy', 'policy', 'terms',
-    'service', 'copyright', 'rights', 'reserved', 'inc', 'llc'
+# Use environment variables for API keys in production!
+PAGESPEED_API_KEY = os.environ.get('PAGESPEED_API_KEY', 'AIzaSyCzMj9hqnN8lSmMIc2vMQZ2mC9N-AcNvcQ') # Example fallback
+PAGESPEED_TIMEOUT = 90
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
 }
-ENGLISH_STOP_WORDS = set(stopwords.words('english')).union(CUSTOM_STOP_WORDS)
+REQUEST_TIMEOUT = 10 # Timeout for external requests in seconds
 
-# --- Helper Functions ---
-
-def get_visible_text(soup):
-    """Extracts visible text content from the main part of the page."""
-    # Attempt to find the main content area
-    main_content = soup.find('main') or soup.find('article') or soup.find('div', role='main')
-
-    if not main_content:
-        main_content = soup.body # Fallback to body if specific main tags aren't found
-
-    if not main_content:
-        return "" # No body or main content found
-
-    # Remove common non-content tags
-    tags_to_remove = ['script', 'style', 'nav', 'footer', 'aside', 'header', 'form', 'button', 'select', 'option']
-    for tag in main_content.find_all(tags_to_remove):
-        tag.decompose()
-
-    # Remove comments
-    comments = main_content.find_all(string=lambda text: isinstance(text, Comment))
-    for comment in comments:
-        comment.extract()
-
-    # Get text, separating paragraphs and list items for better structure
-    lines = []
-    for element in main_content.find_all(['p', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'td', 'th', 'div']):
-        text = element.get_text(separator=' ', strip=True)
-        if text:
-            lines.append(text)
-
-    full_text = ' '.join(lines)
-    # Further clean extraneous whitespace
-    full_text = re.sub(r'\s{2,}', ' ', full_text).strip()
-    return full_text
-
-
-def clean_text_for_keywords(text):
-    """Cleans text specifically for keyword analysis (lowercase, remove punct/nums, lemmatize, stopwords)."""
-    if not text:
-        return "", []
-
-    lemmatizer = WordNetLemmatizer()
-
-    # Lowercase
-    text = text.lower()
-
-    # Remove punctuation
-    text = text.translate(str.maketrans('', '', string.punctuation))
-
-    # Remove numbers
-    text = re.sub(r'\d+', '', text)
-
-    # Tokenize
-    words = word_tokenize(text)
-
-    # Lemmatize and remove stopwords
-    filtered_words = [
-        lemmatizer.lemmatize(word)
-        for word in words
-        if word not in ENGLISH_STOP_WORDS and len(word) > 2 # Keep words longer than 2 chars
-    ]
-
-    cleaned_text_string = ' '.join(filtered_words)
-    return cleaned_text_string, filtered_words
-
-
-def extract_keywords_combined_v2(original_text, cleaned_text, cleaned_words, top_n=20):
-    """
-    Extracts keywords using TF-IDF and RAKE, focusing on cleaned text for TF-IDF
-    and original structure for RAKE.
-    """
-    if not cleaned_words:
-        return {}, 0
-
-    keywords = {}
-    total_word_count = len(cleaned_words) # Count based on cleaned list
-
-    # --- Method 1: TF-IDF on Cleaned Text ---
-    try:
-        # Use cleaned text string for TF-IDF
-        tfidf_vectorizer = TfidfVectorizer(
-            ngram_range=(1, 2), # Uni- and Bi-grams
-            max_features=100,   # Limit feature space
-            stop_words=list(ENGLISH_STOP_WORDS) # Ensure stopwords are handled
-        )
-        tfidf_matrix = tfidf_vectorizer.fit_transform([cleaned_text])
-        feature_names = tfidf_vectorizer.get_feature_names_out()
-        scores = tfidf_matrix.toarray()[0]
-        tfidf_scores = {feature_names[i]: scores[i] for i in range(len(feature_names))}
-    except ValueError: # Handle case with very short text
-        tfidf_scores = {}
-
-    # --- Method 2: RAKE on Original Text (for phrase structure) ---
-    try:
-        r = Rake(stopwords=ENGLISH_STOP_WORDS, min_length=2, max_length=3) # Focus on 2-3 word phrases
-        # Use original text to preserve sentence structure for RAKE
-        r.extract_keywords_from_text(original_text)
-        # Get phrase scores, filter out single-word results if TF-IDF handles them
-        rake_scores_phrases = {phrase: score for phrase, score in r.get_ranked_phrases_with_scores() if len(phrase.split()) > 1}
-        # Optional: Get word scores from RAKE if needed, but TF-IDF is often better for single words
-        # rake_scores_words = r.get_word_degrees()
-    except Exception:
-        rake_scores_phrases = {}
-
-
-    # --- Combine Scores (Prioritize TF-IDF for relevance, RAKE for phrases) ---
-    combined_scores = {}
-
-    # Add TF-IDF scores (weighted higher for single/bigram relevance)
-    for word, score in tfidf_scores.items():
-        combined_scores[word] = combined_scores.get(word, 0) + score * 0.6
-
-    # Add RAKE phrase scores (weighted for multi-word importance)
-    for phrase, score in rake_scores_phrases.items():
-         # Simple check: only add if it seems substantial enough
-        if score > 1.5: # Adjust this threshold based on observation
-            combined_scores[phrase] = combined_scores.get(phrase, 0) + score * 0.4
-
-
-    # Get top N keywords/phrases
-    top_keywords_list = nlargest(top_n, combined_scores.items(), key=lambda item: item[1])
-
-    # Calculate density based on cleaned words list
-    final_keywords = {}
-    word_counts = Counter(cleaned_words)
-    for kw, score in top_keywords_list:
-        # Approximate count for phrases by checking constituent words
-        phrase_words = kw.split()
-        count = 0
-        if len(phrase_words) > 1:
-            # Heuristic: count occurrences where first two words appear near each other
-            # This is complex to do accurately without full text indexing.
-            # Simpler approach: average counts of constituent words or count first word.
-            # Using count of the first word as a proxy:
-            first_word = phrase_words[0]
-            lemmatized_first = WordNetLemmatizer().lemmatize(first_word.lower())
-            count = word_counts.get(lemmatized_first, 0)
-
-            # Alternative: Count exact phrase matches (less robust to variations)
-            # count = original_text.lower().count(kw) # Count in original text
-        else:
-            # Single word: use lemmatized count
-             lemmatized_kw = WordNetLemmatizer().lemmatize(kw.lower())
-             count = word_counts.get(lemmatized_kw, 0)
-
-        density = (count / total_word_count) * 100 if total_word_count > 0 else 0
-        final_keywords[kw] = {"score": round(score, 4), "count": count, "density": round(density, 2)}
-
-
-    return final_keywords, total_word_count
-
-
-def generate_seo_suggestions_v2(keywords_data):
-    """
-    Generates specific SEO suggestions based on extracted keyword data.
-    """
-    if not keywords_data:
-        return {
-            "strategic_focus": "No significant keywords found. Ensure the page has sufficient, relevant text content.",
-            "on_page_tips": [],
-            "content_ideas": [],
-            "technical_seo": []
-        }
-
-    # Sort keywords by score to identify primary/secondary
-    sorted_keywords = sorted(keywords_data.items(), key=lambda item: item[1]['score'], reverse=True)
-    primary_keywords = [kw[0] for kw in sorted_keywords[:3]] # Top 3 as primary
-    secondary_keywords = [kw[0] for kw in sorted_keywords[3:8]] # Next 5 as secondary
-
-    suggestions = {
-        "strategic_focus": f"Focus on '{primary_keywords[0]}' as the primary keyword. Support with '{', '.join(primary_keywords[1:])}' and secondary terms like '{', '.join(secondary_keywords)}'.",
-        "on_page_tips": [],
-        "content_ideas": [],
-        "technical_seo": [
-            "Ensure your XML sitemap is submitted to search engines.",
-            "Check for mobile-friendliness using Google's Mobile-Friendly Test.",
-            "Review page load speed insights and address critical issues."
-        ]
-    }
-
-    # Title and Headings
-    suggestions["on_page_tips"].append(f"**Title Tag:** Include '{primary_keywords[0]}' ideally near the beginning.")
-    suggestions["on_page_tips"].append(f"**H1 Tag:** Ensure the main H1 heading clearly reflects the page topic and contains '{primary_keywords[0]}' or a close variant.")
-    suggestions["on_page_tips"].append(f"**Subheadings (H2, H3):** Use variations of primary keywords (e.g., '{primary_keywords[1]}') and secondary keywords ('{secondary_keywords[0]}', '{secondary_keywords[1]}') in H2s and H3s to structure content and improve readability.")
-
-    # Body Content
-    suggestions["on_page_tips"].append(f"**Introduction:** Mention '{primary_keywords[0]}' within the first 100 words.")
-    suggestions["on_page_tips"].append(f"**Keyword Density:** Aim for a natural density. The calculated densities ({ {kw: data['density'] for kw, data in sorted_keywords[:5]} }) seem reasonable/low/high [manual interpretation needed here based on values]. Aim for 1-2% for primary terms, used naturally.")
-    suggestions["on_page_tips"].append("**Semantic Keywords:** Include related terms and synonyms for your main keywords. For example, if discussing 'SEO analysis', mention 'keyword research', 'on-page optimization', 'technical SEO', 'backlink analysis'.")
-    suggestions["on_page_tips"].append("**Readability:** Ensure content is easy to read (check Flesch score). Break up long paragraphs and use bullet points.")
-
-    # Images and Links
-    suggestions["on_page_tips"].append(f"**Image Alt Text:** Use descriptive alt text for images, incorporating relevant keywords like '{primary_keywords[1]}' where appropriate.")
-    suggestions["on_page_tips"].append(f"**Internal Linking:** Link relevant keywords (e.g., '{secondary_keywords[0]}') to other relevant pages on your site using descriptive anchor text.")
-    # suggestions["on_page_tips"].append(f"**External Linking:** Link out to authoritative sources where relevant, but ensure links open in new tabs if needed.") # Optional
-
-    # Content Ideas
-    suggestions["content_ideas"].append(f"Create a detailed guide or FAQ section answering common questions about '{primary_keywords[0]}'.")
-    suggestions["content_ideas"].append(f"Expand on sub-topics related to '{primary_keywords[1]}' or '{secondary_keywords[0]}'.")
-    suggestions["content_ideas"].append(f"Consider adding case studies, examples, or tutorials related to '{primary_keywords[0]}'.")
-    suggestions["content_ideas"].append(f"Develop content around long-tail variations like 'how to use {primary_keywords[0]} for [specific goal]' or 'best {primary_keywords[1]} tools'.")
-
-
-    # Meta Description Suggestion
-    suggestions["technical_seo"].append(f"**Meta Description:** Craft a compelling meta description (under 160 chars) that includes '{primary_keywords[0]}' and encourages clicks. Example: 'Learn effective {primary_keywords[0]} techniques to boost your rankings. Discover insights on {primary_keywords[1]} and {secondary_keywords[0]}. Read more!'")
-
-
-    return suggestions
-
-
-# --- Main Analysis Functions (Modified) ---
+# --- Main View ---
+def index(request):
+    return render(request, 'index.html')
 
 def analyze_page(request):
+    start_time = time.time() # Record the start time
+
     if request.method == 'GET':
         url = request.GET.get('url')
-        if not url:
-            return JsonResponse({"error": "URL is required."})
 
+        if not url or not url.startswith(('http://', 'https://')):
+            return JsonResponse({"error": "A valid URL starting with http:// or https:// is required."})
+
+        # Validate URL format roughly
         try:
-            headers = {'User-Agent': 'Mozilla/5.0'} # Simple user agent
-            response = requests.get(url, headers=headers, timeout=15) # Added timeout
+            parsed_url = urlparse(url)
+            if not parsed_url.scheme or not parsed_url.netloc:
+                raise ValueError("Invalid URL structure")
+        except ValueError as e:
+            return JsonResponse({"error": f"Invalid URL format: {str(e)}"})
+
+
+        # Fetch the page content
+        try:
+            response = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
             response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
             page_content = response.text
             content_type = response.headers.get('Content-Type', '').lower()
-            if 'text/html' not in content_type:
-                 return JsonResponse({"error": f"Invalid content type: {content_type}. Expected HTML."})
+            if 'html' not in content_type:
+                 return JsonResponse({"error": f"URL does not point to an HTML page (Content-Type: {content_type})."})
 
+        except requests.exceptions.Timeout:
+             return JsonResponse({"error": f"Failed to fetch the page: Request timed out after {REQUEST_TIMEOUT} seconds."})
         except requests.exceptions.RequestException as e:
-            return JsonResponse({"error": f"Failed to fetch the page: {str(e)}"})
+             return JsonResponse({"error": f"Failed to fetch the page: {str(e)}"})
         except Exception as e:
-             return JsonResponse({"error": f"An unexpected error occurred: {str(e)}"})
-
+             return JsonResponse({"error": f"An unexpected error occurred while fetching the page: {str(e)}"})
 
         analysis_results = {}
-        start_time = time.time()
 
-        # --- Run analyses concurrently ---
-        with ThreadPoolExecutor(max_workers=10) as executor: # Limit workers
-            # Submit tasks that don't depend on each other first
+        # Use ThreadPoolExecutor to run analyses in parallel
+        with ThreadPoolExecutor(max_workers=10) as executor: # Adjust max_workers based on resources
+            # Submit tasks - pass content or URL as needed
             future_to_analysis = {
-                # Independent tasks
+                executor.submit(analyze_on_page_optimization, page_content): 'on_page_optimization',
                 executor.submit(analyze_h1_tag, page_content): 'h1_tag',
                 executor.submit(validate_schema, page_content): 'schema_validation',
-                executor.submit(analyze_page_speed, url): 'page_speed', # Uses URL
+                executor.submit(detect_ai_content, page_content): 'ai_content_detection', # Potentially slow
+                executor.submit(analyze_page_speed, url): 'page_speed',
+                executor.submit(check_meta_tags, page_content): 'meta_tags',
+                executor.submit(analyze_keyword_summary, page_content): 'keyword_summary', # Enhanced
                 executor.submit(analyze_anchor_tags, page_content): 'anchor_tags',
-                executor.submit(analyze_url_structure, url): 'url_structure', # Uses URL
-                executor.submit(validate_robots_txt, url): 'robots_txt', # Uses URL
-                executor.submit(validate_sitemap, url): 'xml_sitemap', # Uses URL
-                executor.submit(detect_broken_urls, url, page_content): 'detect_broken_urls', # Pass content to avoid re-fetching
-                executor.submit(detect_ai_content_v2, page_content): 'ai_content_detection', # Updated AI detect
-                executor.submit(check_meta_tags_v2, page_content): 'meta_tags', # Updated meta check
-                executor.submit(analyze_on_page_optimization_v2, page_content): 'on_page_optimization', # Updated on-page
-                 # Keyword analysis depends on content processing
-                executor.submit(analyze_keyword_summary_v2, page_content): 'keyword_summary', # NEW: Central keyword analysis
-                # Blog optimization might depend on keywords, run it if needed
-                # executor.submit(analyze_blog_optimization, page_content, url): 'blog_optimization',
+                executor.submit(analyze_url_structure, url): 'url_structure',
+                executor.submit(validate_robots_txt, url): 'robots_txt',
+                executor.submit(validate_sitemap, url): 'xml_sitemap',
+                executor.submit(analyze_blog_optimization, page_content, url): 'blog_optimization', # Reworked
+                executor.submit(detect_broken_urls, url): 'detect_broken_urls', # Returns only broken
+                executor.submit(analyze_html_structure, page_content): 'html_structure', # New
+                executor.submit(analyze_da_pa_spam, url): 'da_pa_spam_score' # New (Placeholder)
             }
 
             for future in as_completed(future_to_analysis):
                 analysis_name = future_to_analysis[future]
                 try:
-                    analysis_results[analysis_name] = future.result()
+                    result = future.result()
+                    analysis_results[analysis_name] = result
                 except Exception as e:
-                    print(f"Error during analysis '{analysis_name}': {e}") # Log error server-side
+                    # Log the error for debugging
+                    print(f"Error in analysis '{analysis_name}': {str(e)}")
                     analysis_results[analysis_name] = {"error": f"Analysis failed: {str(e)}"}
 
-        end_time = time.time()
-        print(f"Analysis for {url} completed in {end_time - start_time:.2f} seconds")
+        end_time = time.time() # Record the end time
+        execution_time = end_time - start_time # Calculate the difference
+
+        print(f"Analysis for {url} completed in {execution_time:.2f} seconds")
+
+        # Combine keyword results if needed (optional)
+        # For instance, pass keywords from analyze_keyword_summary to other functions
+        # if they require them and weren't passed initially.
+        # Example: analysis_results['on_page_optimization']['keyword_density'] = analysis_results['keyword_summary'].get('keyword_density', {})
 
         return JsonResponse(analysis_results)
 
-    # If not GET request
-    return JsonResponse({"error": "Invalid request method."}, status=405)
+    return JsonResponse({"error": "Invalid request method. Use GET."})
 
 
-# 1. On-Page Optimization (Simplified - Keyword density moved)
-def analyze_on_page_optimization_v2(content):
-    """Analyzes heading structure."""
+# --- Analysis Functions ---
+
+# 1. On-Page Optimization (Headings)
+def analyze_on_page_optimization(content):
+    """
+    Analyzes heading structure (H1-H6). Keyword density is now handled in analyze_keyword_summary.
+    """
     soup = BeautifulSoup(content, 'html.parser')
     headings = soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
-    heading_hierarchy = {f'h{i}': [] for i in range(1, 7)}
+    heading_hierarchy = {'h1': [], 'h2': [], 'h3': [], 'h4': [], 'h5': [], 'h6': []}
     issues = []
+    suggestions = []
 
-    if not soup.find('h1'):
-        issues.append("Missing H1 tag. Every page should have exactly one H1.")
-    elif len(soup.find_all('h1')) > 1:
-         issues.append("Multiple H1 tags found. Best practice is to use only one H1 per page.")
-
-    current_level = 0
     for heading in headings:
-        try:
-            tag = heading.name
-            level = int(tag[1])
-            text = heading.text.strip()
-            if not text:
-                 issues.append(f"Empty {tag.upper()} tag found.")
-            else:
-                heading_hierarchy[tag].append(text)
+        tag = heading.name
+        text = heading.text.strip()
+        if text: # Only consider headings with text
+            heading_hierarchy[tag].append(text)
 
-            # Basic hierarchy check (e.g., H3 should follow H2 or H3, not H1 directly)
-            if level > current_level + 1:
-                 issues.append(f"Heading hierarchy jump: Found <{tag}> potentially without a preceding <h{level-1}>.")
-            current_level = level
+    # Check hierarchy logic
+    last_level = 0
+    for i in range(1, 7):
+        tag = f'h{i}'
+        if heading_hierarchy[tag]:
+            current_level = i
+            if current_level > last_level + 1:
+                 issues.append(f"Heading level skipped: Found <{tag}> after <h{last_level}>. Should follow a logical order (e.g., H1 -> H2 -> H3).")
+            last_level = current_level
+        elif last_level >= i : # If we found e.g. H3 but no H2 later
+            pass # This case is less critical than skipping
 
-        except (ValueError, IndexError):
-            continue # Should not happen with the find_all filter
+    if not heading_hierarchy['h1']:
+        issues.append("Missing H1 tag. Every page should ideally have one primary H1 heading.")
+    elif len(heading_hierarchy['h1']) > 1:
+        issues.append("Multiple H1 tags found. Best practice is to use only one H1 per page.")
+
+    if issues:
+        suggestions.append("Review heading structure. Ensure headings form a logical outline (H1 > H2 > H3...) without skipping levels. Use headings to structure content clearly for users and search engines.")
+    else:
+        suggestions.append("Heading structure appears logical. Ensure headings accurately reflect the content of their sections.")
+
+    suggestions.append("Consider incorporating primary keywords naturally within your H1 and H2 tags where relevant.")
 
     return {
-        'headings_by_level': heading_hierarchy,
-        'heading_issues': issues,
-        'recommendation': "Ensure headings form a logical structure (H1 > H2 > H3...) and are not skipped. Use headings to outline page content clearly."
-        # Keyword density is now handled in analyze_keyword_summary_v2
+        'headings': heading_hierarchy,
+        'issues': issues,
+        'suggestions': suggestions
+        # Keyword density removed - handled by analyze_keyword_summary
     }
 
-# Keyword Density function (removed - integrated into keyword summary)
-# def get_keyword_density(content): ...
+# (Removed standalone get_keyword_density - integrated into analyze_keyword_summary)
 
-# 2. H1 Tag Check (Remains similar, could be integrated into On-Page)
+# 2. H1 Tag Check
 def analyze_h1_tag(content):
+    """
+    Analyzes the H1 tag specifically against the title.
+    """
     soup = BeautifulSoup(content, 'html.parser')
     h1_tags = soup.find_all('h1')
     title_tag = soup.find('title')
 
     h1_texts = [h1.text.strip() for h1 in h1_tags if h1.text.strip()]
     title_text = title_tag.text.strip() if title_tag else None
-    num_h1 = len(h1_texts)
-    h1_found = num_h1 > 0
-    h1_text = h1_texts[0] if num_h1 == 1 else None # Report text only if exactly one non-empty H1
 
-    status = "OK"
-    message = f"Found {num_h1} non-empty H1 tag(s)."
-    if num_h1 == 0:
-        status = "Error"
-        message = "No H1 tag found. Crucial for SEO and accessibility."
-    elif num_h1 > 1:
-        status = "Warning"
-        message = f"Found {num_h1} non-empty H1 tags. Best practice is one H1 per page."
+    issues = []
+    suggestions = []
 
-    title_match = False
-    if h1_text and title_text and h1_text.lower() == title_text.lower():
-         title_match = True
+    if not h1_texts:
+        issues.append("No H1 tag found.")
+        suggestions.append("Add a primary H1 tag that clearly describes the main topic of the page. It's crucial for SEO and accessibility.")
+    elif len(h1_texts) > 1:
+        issues.append(f"Multiple H1 tags found ({len(h1_texts)}).")
+        suggestions.append("Use only one H1 tag per page to define the main heading. Convert other H1s to H2s or lower if appropriate.")
 
+    if not title_text:
+        issues.append("No <title> tag found.")
+        suggestions.append("Add a concise and descriptive <title> tag. It appears in browser tabs and search results.")
+    elif h1_texts and title_text:
+        # Check similarity (simple comparison, could be improved with NLP)
+        main_h1 = h1_texts[0]
+        if main_h1.lower() != title_text.lower():
+             suggestions.append(f"The primary H1 ('{main_h1}') and the Title ('{title_text}') differ. While not strictly required, ensuring they are closely related and both contain target keywords can improve relevance signals.")
+        else:
+             suggestions.append("The primary H1 and Title tags are identical or very similar. This is generally good practice.")
 
     return {
-        'status': status,
-        'message': message,
-        'h1_found': h1_found,
-        'h1_count': num_h1,
-        'h1_texts': h1_texts, # List all found H1 texts
+        'h1_found': len(h1_texts) > 0,
+        'h1_count': len(h1_texts),
+        'h1_texts': h1_texts,
         'title_text': title_text,
-        'title_h1_match': title_match,
-        'recommendation': "Ensure exactly one, descriptive H1 tag per page, closely related to the page's title and main topic."
+        'issues': issues,
+        'suggestions': suggestions
     }
 
-# 3. Schema Validation (No changes needed based on request)
+# 3. Schema.org Validation
 def validate_schema(page_content):
+    """
+    Finds JSON-LD schema.org data and identifies its types.
+    Does not perform full validation against schema.org standards.
+    """
     soup = BeautifulSoup(page_content, 'html.parser')
     scripts = soup.find_all('script', type='application/ld+json')
     schemas = []
-    errors = []
+    parsing_errors = []
 
     for script in scripts:
         try:
-            # Handle potential comments within script tags
+            # Handle potential comments within script tags if necessary
             script_content = script.string
             if script_content:
-                 # Basic cleaning of potential JS comments that might invalidate JSON
-                 script_content = re.sub(r'//.*?\n|/\*.*?\*/', '', script_content, flags=re.S)
-                 data = json.loads(script_content)
-                 schemas.append(data)
-            else:
-                 errors.append("Found empty <script type='application/ld+json'> tag.")
+                # Basic cleaning of common non-JSON elements if needed (use cautiously)
+                # script_content = re.sub(r'^\s*//.*$', '', script_content, flags=re.MULTILINE) # Remove // comments
+                data = json.loads(script_content)
+                if isinstance(data, list):
+                    schemas.extend(data)
+                else:
+                    schemas.append(data)
         except json.JSONDecodeError as e:
-            errors.append(f"Invalid JSON-LD found: {e}. Content snippet: {script.string[:100]}...")
+            parsing_errors.append(f"Could not parse JSON-LD: {e}. Content: {script.string[:100]}...")
         except Exception as e:
-            errors.append(f"Error processing script tag: {e}")
-
+            parsing_errors.append(f"Unexpected error parsing script: {e}")
 
     results = []
-    if schemas:
-        for schema in schemas:
-            if isinstance(schema, dict):
-                schema_type = schema.get('@type', 'Type not specified')
-                results.append({"type": schema_type, "content": schema})
-            elif isinstance(schema, list):
-                for item in schema:
-                    if isinstance(item, dict):
-                        schema_type = item.get('@type', 'Type not specified')
-                        results.append({"type": schema_type, "content": item})
-    elif not errors:
-         errors.append("No schema.org JSON-LD structured data found.")
+    schema_types_found = set()
+    suggestions = []
 
+    for schema in schemas:
+        if isinstance(schema, dict):
+            schema_type = schema.get('@type')
+            if schema_type:
+                results.append({"type": schema_type, "content": schema})
+                schema_types_found.add(schema_type)
+            else:
+                parsing_errors.append("Found JSON-LD object missing '@type'.")
+        # else: # Handle cases where top-level isn't a dict, though less common for schema
+            # parsing_errors.append(f"Found JSON-LD element that is not an object: {type(schema)}")
+
+
+    if not results:
+        suggestions.append("No Schema.org structured data (JSON-LD) found. Adding structured data helps search engines understand your content better and can enable rich results (e.g., ratings, FAQs).")
+    else:
+        suggestions.append(f"Found Schema.org types: {', '.join(schema_types_found)}. Verify the implementation using Google's Rich Results Test tool.")
+        suggestions.append("Consider adding more specific schema types relevant to your content (e.g., Article, Product, LocalBusiness, FAQPage) if applicable.")
 
     return {
-        "found_schemas": results,
-        "validation_errors": errors,
-        "recommendation": "Use schema.org structured data (JSON-LD recommended) to help search engines understand your content context (e.g., Article, Product, Event)."
+        "schemas_found": results,
+        "parsing_errors": parsing_errors,
+        "suggestions": suggestions
         }
 
 
-# 4. AI Content Detection (V2 - No OpenAI/T5)
-def detect_ai_content_v2(content):
+# 4. AI Content Detection (using Transformers T5)
+def preprocess_content(content):
     """
-    Detects potential AI content using heuristics and readability, without external AI models.
+    Improved preprocessing to extract cleaner text content from HTML.
     """
     soup = BeautifulSoup(content, 'html.parser')
-    page_text = get_visible_text(soup) # Use the function to get main content text
 
-    if len(page_text.strip()) < 100: # Need sufficient text
+    # Remove script and style elements
+    for script_or_style in soup(["script", "style"]):
+        script_or_style.decompose()
+
+    # Get text, separating paragraphs and block elements better
+    text = soup.get_text(separator='\n', strip=True)
+
+    # Remove excessive whitespace and normalize line breaks
+    text = re.sub(r'\n\s*\n', '\n', text) # Collapse multiple newlines
+    text = re.sub(r'[ \t]+', ' ', text) # Collapse spaces/tabs within lines
+    text = text.strip()
+
+    # Basic punctuation cleaning (optional, depending on model needs)
+    # text = re.sub(r'([.,!?])\1+', r'\1', text) # Remove repeated punctuation
+
+    return text
+
+# Cache for the T5 model and tokenizer to avoid reloading on every request
+t5_model = None
+t5_tokenizer = None
+
+def load_t5_model():
+    """Loads the T5 model and tokenizer if not already loaded."""
+    global t5_model, t5_tokenizer
+    if t5_model is None or t5_tokenizer is None:
+        try:
+            print("Loading T5 model and tokenizer (this may take a moment)...")
+            # Consider using 'google/flan-t5-small' or other variants if 't5-small' has issues
+            model_name = "t5-small"
+            t5_model = T5ForConditionalGeneration.from_pretrained(model_name)
+            t5_tokenizer = T5Tokenizer.from_pretrained(model_name)
+            print("T5 model loaded.")
+        except Exception as e:
+            print(f"Error loading T5 model: {e}")
+            # Set to False to prevent retries within the same run if loading fails
+            t5_model = False
+            t5_tokenizer = False
+    return t5_model, t5_tokenizer
+
+
+def detect_ai_content(content):
+    """
+    Detects potential AI-like patterns and suggests rewrites using T5.
+    NOTE: T5 inference can be slow and resource-intensive.
+    """
+    performance_note = "AI detection using T5 model can be slow."
+    clean_content = preprocess_content(content)
+
+    if len(clean_content.strip()) < 50: # Need sufficient text
         return {
-            "potential_ai_flag": False,
+            "performance_note": performance_note,
+            "ai_detected_heuristic": False,
             "readability_score": None,
-            "message": "Not enough text content to perform meaningful analysis.",
-            "recommendation": "Ensure pages have substantial, unique content."
+            "paraphrase_suggestion": "Content too short for reliable AI analysis or paraphrasing.",
+            "error": None
         }
 
-    ai_detected = False
+    ai_detected_heuristic = False
     readability_score = None
-    issues = []
+    human_suggestion = "Could not generate paraphrase suggestion."
+    error_message = None
 
-    # Heuristic 1: Check for common AI generation footprints (simple check)
-    ai_footprints = ["generated by ai", "language model", "openai", "gpt-3", "gpt-4", "claude", "bard", "llm"]
-    page_text_lower = page_text.lower()
-    for footprint in ai_footprints:
-        if footprint in page_text_lower:
-            ai_detected = True
-            issues.append(f"Found potential AI footprint phrase: '{footprint}'.")
-            break # Stop after first finding
+    # --- Heuristics (Basic Checks) ---
+    # Generic phrases often found in basic AI output (expand this list)
+    generic_phrases = [
+        "in conclusion", "it is important to note", "as an AI language model",
+        "unlock the power", "delve into the world", "in the digital age"
+    ]
+    for phrase in generic_phrases:
+        if phrase in clean_content.lower():
+            ai_detected_heuristic = True
+            break
 
-    # Heuristic 2: Check readability score
+    # Check readability score (very high/low scores *might* indicate non-human patterns)
     try:
-        # Calculate score on the extracted visible text
-        readability_score = flesch_reading_ease(page_text)
-        if readability_score < 30: # Very difficult - can sometimes be AI jargon
-             # ai_detected = True # Commented out: Low score isn't definitively AI
-             issues.append(f"Readability score is very low ({readability_score:.2f}), indicating complex language. Review for clarity.")
-        elif readability_score > 90: # Very easy - can sometimes be overly simplistic AI output
-             # ai_detected = True # Commented out: High score isn't definitively AI
-             issues.append(f"Readability score is very high ({readability_score:.2f}), indicating very simple language. Ensure sufficient depth.")
+        readability_score = flesch_reading_ease(clean_content)
+        # Adjust thresholds based on expected content type
+        if readability_score < 30 or readability_score > 85:
+             # This is a weak indicator, use with caution
+             # ai_detected_heuristic = True
+             pass
     except Exception as e:
-        issues.append(f"Could not calculate readability score: {e}")
+        error_message = f"Error calculating readability score: {e}"
 
-    # Heuristic 3: Repetitiveness (Basic check)
-    # Tokenize and check for overly repeated phrases (e.g., 3-grams)
+    # --- Paraphrasing with T5 (Slow Part) ---
     try:
-        words = word_tokenize(page_text_lower)
-        trigrams = [' '.join(words[i:i+3]) for i in range(len(words)-2)]
-        if trigrams:
-             trigram_counts = Counter(trigrams)
-             most_common = trigram_counts.most_common(1)[0]
-             # If a trigram appears many times relative to text length
-             if most_common[1] > 5 and most_common[1] > len(words) / 100:
-                  ai_detected = True
-                  issues.append(f"High repetition of phrase '{most_common[0]}' ({most_common[1]} times). Could indicate unnatural writing.")
+        model, tokenizer = load_t5_model()
+
+        if model and tokenizer: # Check if loading was successful
+            # Paraphrase a segment rather than the whole text for speed/relevance
+            # Taking the first ~200 words as an example segment
+            segment_to_paraphrase = " ".join(clean_content.split()[:200])
+
+            input_text = f"paraphrase: {segment_to_paraphrase}"
+            # Ensure tokenizer handles potential long inputs correctly
+            input_ids = tokenizer.encode(input_text, return_tensors="pt", max_length=512, truncation=True)
+
+            # Generate paraphrased text
+            outputs = model.generate(
+                input_ids,
+                max_length=512, # Max length of generated output
+                num_return_sequences=1,
+                num_beams=4,      # Beam search for potentially better quality
+                early_stopping=True # Stop when end token is generated
+                # temperature=0.7 # Adjust creativity vs coherence if needed
+            )
+            human_suggestion = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        elif model is False: # Loading failed previously
+             error_message = "T5 model failed to load, cannot generate paraphrase."
+             human_suggestion = "Paraphrasing unavailable due to model loading error."
+        else:
+             # Should not happen if load_t5_model logic is correct
+             error_message = "T5 model/tokenizer not available."
+             human_suggestion = "Paraphrasing unavailable."
+
     except Exception as e:
-        issues.append(f"Could not perform repetition analysis: {e}")
+        error_message = f"Error during T5 paraphrase generation: {str(e)}"
+        human_suggestion = f"Could not generate paraphrase suggestion due to error: {str(e)}"
 
 
-    # Combine results
-    message = "AI content heuristics checked."
-    if ai_detected:
-        message = "Potential indicators of AI-generated or unnatural content found."
+    # --- Suggestions ---
+    suggestions = []
+    if ai_detected_heuristic:
+        suggestions.append("Content shows some patterns (e.g., generic phrases, unusual readability score) that *might* indicate AI generation or unnatural writing. Review for authenticity and clarity.")
+    else:
+         suggestions.append("Heuristic checks did not find strong indicators of AI generation. However, manual review is always recommended.")
+
+    if readability_score is not None:
+         suggestions.append(f"Flesch Reading Ease score: {readability_score:.2f}. Aim for a score appropriate for your target audience (e.g., 60-70 for general public).")
+
+    suggestions.append("Consider the generated paraphrase suggestion for alternative phrasing, but always review and edit suggestions to ensure accuracy, tone, and originality.")
+
 
     return {
-        "potential_ai_flag": ai_detected,
-        "readability_score": round(readability_score, 2) if readability_score is not None else None,
-        "analysis_issues": issues,
-        "message": message,
-        "recommendation": "Review content for originality, natural language flow, accuracy, and unique insights. While heuristics can flag patterns, human review is essential. Focus on providing genuine value to the reader."
+        "performance_note": performance_note,
+        "ai_detected_heuristic": ai_detected_heuristic,
+        "readability_score": f"{readability_score:.2f}" if readability_score is not None else "N/A",
+        "paraphrase_suggestion": human_suggestion,
+        "suggestions": suggestions,
+        "error": error_message
     }
 
 
-# 5. Page Speed Analysis (No changes needed)
+# 5. Page Speed Analysis
 def analyze_page_speed(url):
+    """
+    Analyzes page speed using Google PageSpeed Insights API.
+    """
+    # Ensure API key is available
+    if not PAGESPEED_API_KEY or PAGESPEED_API_KEY == 'YOUR_SECURE_API_KEY':
+        return {"error": "PageSpeed API key is missing or not configured."}
+
+    api_url = f'https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url={url}&key={PAGESPEED_API_KEY}&category=PERFORMANCE' # Focus on performance
+
     try:
-        api_url = f'https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url={url}&key={PAGESPEED_API_KEY}&category=PERFORMANCE&strategy=DESKTOP' # Added category/strategy
-        desktop_response = requests.get(api_url, timeout=60) # Increase timeout for API call
-        desktop_response.raise_for_status()
-        desktop_data = desktop_response.json()
+        print("Requesting Pagespeed analysis for {url} with timeout {PAGESPEED_TIMEOUT}s...")
+        response = requests.get(api_url, timeout=PAGESPEED_TIMEOUT) # Allow longer timeout for API
+        response.raise_for_status()
+        data = response.json()
 
-        api_url_mobile = f'https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url={url}&key={PAGESPEED_API_KEY}&category=PERFORMANCE&strategy=MOBILE'
-        mobile_response = requests.get(api_url_mobile, timeout=60)
-        mobile_response.raise_for_status()
-        mobile_data = mobile_response.json()
+        lighthouse_result = data.get('lighthouseResult', {})
+        categories = lighthouse_result.get('categories', {})
+        audits = lighthouse_result.get('audits', {})
+        performance_score = categories.get('performance', {}).get('score')
 
-        def extract_metrics(data):
-            lighthouse_result = data.get('lighthouseResult', {})
-            categories = lighthouse_result.get('categories', {})
-            audits = lighthouse_result.get('audits', {})
-            performance_score = categories.get('performance', {}).get('score', 'N/A')
-            # Ensure score is scaled 0-100
-            if isinstance(performance_score, (float, int)):
-                 performance_score = int(performance_score * 100)
+        # Extract core web vitals and other key metrics
+        metrics = {
+            "Performance_Score": f"{int(performance_score * 100)}" if performance_score is not None else "N/A",
+            "First_Contentful_Paint": audits.get('first-contentful-paint', {}).get('displayValue', 'N/A'),
+            "Speed_Index": audits.get('speed-index', {}).get('displayValue', 'N/A'),
+            "Largest_Contentful_Paint": audits.get('largest-contentful-paint', {}).get('displayValue', 'N/A'),
+            "Cumulative_Layout_Shift": audits.get('cumulative-layout-shift', {}).get('displayValue', 'N/A'),
+            "Time_to_Interactive": audits.get('interactive', {}).get('displayValue', 'N/A'),
+            "Total_Blocking_Time": audits.get('total-blocking-time', {}).get('displayValue', 'N/A')
+        }
 
-            return {
-                "Performance_Score": performance_score,
-                "First_Contentful_Paint": audits.get('first-contentful-paint', {}).get('displayValue', 'N/A'),
-                "Speed_Index": audits.get('speed-index', {}).get('displayValue', 'N/A'),
-                "Largest_Contentful_Paint": audits.get('largest-contentful-paint', {}).get('displayValue', 'N/A'),
-                "Cumulative_Layout_Shift": audits.get('cumulative-layout-shift', {}).get('displayValue', 'N/A'),
-                "Time_to_Interactive": audits.get('interactive', {}).get('displayValue', 'N/A'),
-                "Total_Blocking_Time": audits.get('total-blocking-time', {}).get('displayValue', 'N/A')
-            }
+        # Add suggestions based on score
+        suggestions = []
+        if performance_score is not None:
+            score_num = int(performance_score * 100)
+            if score_num < 50:
+                suggestions.append(f"Performance score ({score_num}) is poor. Focus on critical optimizations like image compression, reducing JavaScript execution time, and server response time.")
+            elif score_num < 90:
+                suggestions.append(f"Performance score ({score_num}) is average. Address specific audit suggestions from PageSpeed Insights to improve metrics like LCP and TBT.")
+            else:
+                suggestions.append(f"Performance score ({score_num}) is good! Continue monitoring Core Web Vitals.")
+        else:
+            suggestions.append("Could not retrieve performance score. Check PageSpeed Insights directly for detailed audits.")
+
+        suggestions.append("Prioritize improving Largest Contentful Paint (LCP), Cumulative Layout Shift (CLS), and potentially First Input Delay (FID) / Interaction to Next Paint (INP) - closely related to TBT.")
+        suggestions.append("Use tools like Google PageSpeed Insights website, Lighthouse (in Chrome DevTools), and WebPageTest.org for detailed diagnostics.")
 
         return {
-            "desktop": extract_metrics(desktop_data),
-            "mobile": extract_metrics(mobile_data),
-            "recommendation": "Analyze both desktop and mobile scores. Focus on improving Core Web Vitals (LCP, CLS, TBT/FID) and addressing specific audit recommendations from Google PageSpeed Insights."
+            "metrics": metrics,
+            "suggestions": suggestions
             }
 
     except requests.exceptions.Timeout:
-         return {"error": "Failed to fetch page speed: API request timed out."}
+         return {"error": f"PageSpeed API request timed out."}
     except requests.exceptions.RequestException as e:
-        # Check for specific API errors if possible from response content
+        # Try to parse error response from Google API
         error_details = ""
         try:
-            if e.response:
-                 error_data = e.response.json()
-                 error_details = error_data.get("error", {}).get("message", str(e))
-            else:
-                 error_details = str(e)
-        except Exception: # Fallback if response isn't JSON
-             error_details = str(e)
-        return {"error": f"Failed to fetch page speed: {error_details}"}
+             error_data = e.response.json()
+             error_details = error_data.get('error', {}).get('message', '')
+        except:
+             pass # Ignore if response is not JSON
+        return {"error": f"Failed to fetch page speed: {str(e)}. {error_details}"}
     except Exception as e:
-         return {"error": f"An unexpected error occurred during page speed analysis: {str(e)}"}
+        return {"error": f"An unexpected error occurred during page speed analysis: {str(e)}"}
 
 
-# 6. Meta Tags Check (V2 - Simplified, relies on Keyword Summary for suggestions)
-def check_meta_tags_v2(content):
-    """Checks for essential meta tags: title, description, keywords (optional)."""
+# 6. Meta Tags Check
+def check_meta_tags(content):
+    """
+    Checks for meta description and keywords (though keywords are less important now).
+    Relies on analyze_keyword_summary for keyword suggestions.
+    """
     soup = BeautifulSoup(content, 'html.parser')
-    results = {}
-    issues = []
 
-    # Title Tag
-    title_tag = soup.find('title')
-    if title_tag and title_tag.string:
-        results['title'] = title_tag.string.strip()
-        if len(results['title']) > 60:
-            issues.append(f"Title tag is too long ({len(results['title'])} chars). Aim for 50-60 characters.")
-        if len(results['title']) < 20:
-             issues.append(f"Title tag seems short ({len(results['title'])} chars). Ensure it's descriptive.")
-    else:
-        results['title'] = None
-        issues.append("Missing Title tag. Essential for SEO.")
+    meta_desc_tag = soup.find('meta', attrs={'name': re.compile(r'^description$', re.I)})
+    meta_keywords_tag = soup.find('meta', attrs={'name': re.compile(r'^keywords$', re.I)})
+    # Also check Open Graph tags (important for social sharing)
+    og_title = soup.find('meta', property='og:title')
+    og_description = soup.find('meta', property='og:description')
+    og_image = soup.find('meta', property='og:image')
+
+    meta_description = meta_desc_tag['content'].strip() if meta_desc_tag and meta_desc_tag.get('content') else None
+    meta_keywords = meta_keywords_tag['content'].strip() if meta_keywords_tag and meta_keywords_tag.get('content') else None
+
+    issues = []
+    suggestions = []
 
     # Meta Description
-    meta_desc = soup.find('meta', attrs={'name': re.compile(r'^description$', re.I)}) # Case-insensitive name
-    if meta_desc and meta_desc.get('content'):
-        results['meta_description'] = meta_desc['content'].strip()
-        if len(results['meta_description']) > 160:
-            issues.append(f"Meta Description is too long ({len(results['meta_description'])} chars). Aim for 150-160 characters.")
-        if len(results['meta_description']) < 70:
-            issues.append(f"Meta Description seems short ({len(results['meta_description'])} chars). Ensure it's compelling and descriptive.")
+    if not meta_description:
+        issues.append("Meta description is missing.")
+        suggestions.append("Add a unique and compelling meta description (around 150-160 characters) that accurately summarizes the page content and encourages clicks from search results.")
+    elif len(meta_description) < 70:
+        issues.append("Meta description is very short.")
+        suggestions.append("Expand the meta description to provide more context and include relevant keywords (aim for 150-160 characters).")
+    elif len(meta_description) > 165: # Approximate limit
+        issues.append("Meta description might be too long and could be truncated in search results.")
+        suggestions.append("Shorten the meta description to ensure the most important information is visible (aim for 150-160 characters).")
     else:
-        results['meta_description'] = None
-        issues.append("Missing Meta Description. Important for click-through rates from search results.")
+        suggestions.append("Meta description length seems appropriate. Ensure it is unique, descriptive, and includes target keywords.")
 
-    # Meta Keywords (Less important now, but check if present)
-    meta_keywords = soup.find('meta', attrs={'name': re.compile(r'^keywords$', re.I)})
-    if meta_keywords and meta_keywords.get('content'):
-        results['meta_keywords'] = [kw.strip() for kw in meta_keywords['content'].split(',') if kw.strip()]
-        # Note: Relevance check against content is complex and better handled by overall keyword analysis
-        # issues.append("Meta Keywords tag found. Note: Google largely ignores this tag for ranking, but it might be used by other systems.")
+    # Meta Keywords
+    if meta_keywords:
+        suggestions.append("Meta keywords tag found. Note: Google and most major search engines largely ignore this tag for ranking purposes. Focus efforts on content quality and other meta tags instead.")
     else:
-        results['meta_keywords'] = None
-        # issues.append("Meta Keywords tag not found (generally not essential for Google).")
+        suggestions.append("Meta keywords tag is missing. This is generally fine as it's not a significant ranking factor for major search engines.")
 
-
-     # Viewport Check
-    meta_viewport = soup.find('meta', attrs={'name': re.compile(r'^viewport$', re.I)})
-    if not meta_viewport or not meta_viewport.get('content'):
-         results['meta_viewport'] = None
-         issues.append("Missing Meta Viewport tag. Essential for mobile responsiveness.")
-    else:
-         results['meta_viewport'] = meta_viewport.get('content')
+    # Open Graph Tags
+    if not og_title or not og_title.get('content'):
+         issues.append("Open Graph Title (og:title) is missing.")
+         suggestions.append("Add an 'og:title' meta tag for optimal display when shared on social media platforms.")
+    if not og_description or not og_description.get('content'):
+         issues.append("Open Graph Description (og:description) is missing.")
+         suggestions.append("Add an 'og:description' meta tag for social media sharing.")
+    if not og_image or not og_image.get('content'):
+         issues.append("Open Graph Image (og:image) is missing.")
+         suggestions.append("Add an 'og:image' meta tag to specify the image used when the page is shared on social media.")
 
 
     return {
-        'found_tags': results,
+        'meta_description': meta_description,
+        'meta_keywords': meta_keywords,
+        'open_graph_tags': {
+            'og:title': og_title['content'].strip() if og_title and og_title.get('content') else None,
+            'og:description': og_description['content'].strip() if og_description and og_description.get('content') else None,
+            'og:image': og_image['content'].strip() if og_image and og_image.get('content') else None,
+        },
         'issues': issues,
-        'recommendation': "Ensure Title and Meta Description tags exist, are within optimal length limits, and accurately describe the page content. Include the primary keyword naturally. Ensure Meta Viewport tag is present for mobile usability. Keyword suggestions are provided in the 'Keyword Summary' section."
+        'suggestions': suggestions
+        # Keyword suggestions are now part of analyze_keyword_summary
     }
 
-# `suggest_keywords` function removed as it's replaced by the logic in `analyze_keyword_summary_v2`
+# (Removed suggest_keywords function - logic merged into analyze_keyword_summary)
 
 
-# 7. Broken URL Detection (Modified to accept content)
-def detect_broken_urls(url, page_content, max_threads=10):
-    """Detects broken URLs using page content to avoid re-fetching."""
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    }
+# 7. Broken URL Detection
+def detect_broken_urls(url, max_threads=10):
+    """
+    Detects broken internal and external links on the page. Returns only broken URLs.
+    """
+    broken_urls_info = []
+    processed_urls = set() # Avoid checking the same URL multiple times
 
-    # Function to check a single link
     def check_link_status(link_to_check):
+        """Helper function to check URL status."""
+        if link_to_check in processed_urls:
+            return None # Already checked
+
+        processed_urls.add(link_to_check)
+
         try:
-            # Use HEAD request for efficiency, follow redirects, short timeout
-            response = requests.head(link_to_check, headers=headers, allow_redirects=True, timeout=7)
-            # Consider 4xx and 5xx errors as broken, allow redirects (3xx should resolve)
-            if response.status_code >= 400:
+            # Use HEAD request for efficiency, fallback to GET if HEAD fails/is disallowed
+            response = requests.head(link_to_check, headers=HEADERS, allow_redirects=True, timeout=REQUEST_TIMEOUT)
+            # Some servers block HEAD, try GET
+            if not response.ok: # Status code >= 400 or other issue with HEAD
+                 time.sleep(0.2) # Small delay before GET
+                 response = requests.get(link_to_check, headers=HEADERS, allow_redirects=True, timeout=REQUEST_TIMEOUT)
+
+            if not response.ok: # Check status code after HEAD or GET
                 return (link_to_check, response.status_code) # Broken URL with status code
-            return (link_to_check, None) # Valid URL
+            return None # Valid URL
+
         except requests.exceptions.Timeout:
-             return (link_to_check, "Timeout") # Broken due to timeout
+            return (link_to_check, "Timeout")
         except requests.exceptions.RequestException as e:
-             # Log specific connection errors etc.
-             error_type = type(e).__name__
-             return (link_to_check, f"Request Error: {error_type}") # Broken URL with error message
-        except Exception as e: # Catch any other unexpected errors
-             return (link_to_check, f"Unexpected Error: {str(e)}")
-
-
-    broken_urls_list = []
-    valid_urls_list = []
-    processed_urls = set() # Keep track of URLs already checked
+            # Simplify common errors
+            error_str = str(e)
+            if "SSL" in error_str: return (link_to_check, "SSL Error")
+            if "Connection refused" in error_str: return (link_to_check, "Connection Refused")
+            if "Name or service not known" in error_str: return (link_to_check, "DNS Error")
+            return (link_to_check, f"Request Error: {type(e).__name__}") # Generic error
+        except Exception as e: # Catch other potential errors
+             return (link_to_check, f"Unexpected Error: {type(e).__name__}")
 
     try:
-        soup = BeautifulSoup(page_content, 'html.parser')
-        base_url = url # Used for resolving relative links
+        # Fetch the initial page
+        response = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, 'html.parser')
 
-        # Find all anchor tags with href attribute
-        links = soup.find_all('a', href=True)
-        urls_to_check = []
+        # Extract all valid http/https links
+        links_to_check = set()
+        for link_tag in soup.find_all('a', href=True):
+            href = link_tag['href']
+            # Basic validation and normalization
+            if href and not href.startswith(('#', 'javascript:', 'mailto:', 'tel:')):
+                absolute_link = urljoin(url, href) # Resolve relative URLs
+                parsed_link = urlparse(absolute_link)
+                if parsed_link.scheme in ['http', 'https']:
+                    # Remove fragments (#) for checking
+                    links_to_check.add(parsed_link._replace(fragment="").geturl())
 
-        for link in links:
-            href = link['href']
-            # Resolve relative URLs
-            absolute_url = urljoin(base_url, href)
-            # Parse the URL
-            parsed_url = urlparse(absolute_url)
+        # Check links concurrently
+        if links_to_check:
+            with ThreadPoolExecutor(max_workers=max_threads) as executor:
+                future_to_link = {executor.submit(check_link_status, link): link for link in links_to_check}
+                for future in as_completed(future_to_link):
+                    result = future.result()
+                    if result: # If function returned a broken link tuple
+                        broken_urls_info.append({"url": result[0], "status": result[1]})
+        else:
+             # No links found to check
+             pass
 
-            # Filter out non-http(s) links, fragments, and already processed URLs
-            if parsed_url.scheme in ['http', 'https'] and absolute_url not in processed_urls:
-                 urls_to_check.append(absolute_url)
-                 processed_urls.add(absolute_url)
 
-
-        # Check URLs concurrently
-        if urls_to_check:
-             with ThreadPoolExecutor(max_workers=max_threads) as executor:
-                 results = list(executor.map(check_link_status, urls_to_check))
-
-             for link, error_info in results:
-                 if error_info:
-                     broken_urls_list.append({"url": link, "status": error_info})
-                 else:
-                     valid_urls_list.append(link)
+        suggestions = []
+        if broken_urls_info:
+            suggestions.append(f"Found {len(broken_urls_info)} potentially broken links. Broken links negatively impact user experience and can waste crawl budget.")
+            suggestions.append("Review the listed URLs and update or remove them. Check both internal and external links.")
+        else:
+            suggestions.append("No broken links detected in this scan. Regularly check for broken links as part of website maintenance.")
 
         return {
-            "total_links_checked": len(processed_urls),
-            "broken_links_count": len(broken_urls_list),
-            "broken_links": broken_urls_list,
-            # "valid_links": valid_urls_list, # Usually too long to be useful in JSON output
-            "recommendation": f"Found {len(broken_urls_list)} potentially broken links. Review these links and update or remove them to improve user experience and SEO."
+            "broken_urls": broken_urls_info, # Only return broken ones
+            "suggestions": suggestions
         }
 
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching the page ({url}) for link checking: {e}")
+        return {"broken_urls": [], "error": f"Could not fetch the page to check links: {str(e)}"}
     except Exception as e:
-        print(f"Error parsing HTML or processing links: {e}")
-        return {
-             "error": f"Failed during broken link analysis: {str(e)}",
-             "broken_links": [],
-             "recommendation": "Could not complete broken link analysis due to an error."
-             }
+        print(f"Unexpected error during broken link detection for {url}: {e}")
+        return {"broken_urls": [], "error": f"An unexpected error occurred during link checking: {str(e)}"}
 
 
+# 8. Keyword Analysis and Summary (Enhanced)
+def clean_text_for_keywords(text):
+    """ More robust text cleaning for keyword analysis. """
+    text = text.lower()
+    # Remove HTML tags (redundant if using soup.get_text, but safe)
+    text = re.sub(r'<[^>]+>', ' ', text)
+    # Remove URLs
+    text = re.sub(r'http\S+|www\S+|https\S+', '', text, flags=re.MULTILINE)
+    # Remove emails
+    text = re.sub(r'\S+@\S+', '', text)
+    # Remove punctuation and numbers, keep spaces and basic word chars
+    text = re.sub(r'[^a-z\s]', ' ', text)
+    # Remove extra whitespace
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
 
-# 8. Keyword Summary and Suggestions (V2 - Central analysis point)
-def analyze_keyword_summary_v2(page_content):
+def get_ngrams(tokens, n):
+    """Generates n-grams from a list of tokens."""
+    return [" ".join(gram) for gram in ngrams(tokens, n)]
+
+def analyze_keyword_summary(page_content):
     """
-    Performs comprehensive keyword analysis using visible text and provides SEO suggestions.
+    Enhanced keyword analysis using NLTK, n-grams, frequency, and TF-IDF.
+    Calculates keyword density and generates a summary.
     """
-    start_time = time.time()
     soup = BeautifulSoup(page_content, 'html.parser')
+    # Extract text from meaningful tags, exclude nav/footer if possible
+    main_content = soup.find('main') or soup.find('article') or soup.find('body') # Prioritize main content areas
+    text_content = main_content.get_text(separator=" ", strip=True) if main_content else soup.get_text(separator=" ", strip=True)
 
-    # 1. Extract Visible Text
-    original_text = get_visible_text(soup)
-    if not original_text or len(original_text.strip()) < 50: # Check for minimum content length
+    cleaned_text = clean_text_for_keywords(text_content)
+    tokens = word_tokenize(cleaned_text)
+    stop_words_set = set(stopwords.words('english'))
+    # Add custom irrelevant words if needed
+    custom_stops = {'use', 'like', 'get', 'also', 'make', 'one', 'may', 'need'}
+    stop_words_set.update(custom_stops)
+
+    filtered_tokens = [word for word in tokens if word not in stop_words_set and len(word) > 2]
+
+    if not filtered_tokens or len(filtered_tokens) < 10: # Need enough content
         return {
-            "error": "Insufficient meaningful text content found on the page for keyword analysis.",
-             "analysis_time_seconds": round(time.time() - start_time, 2)
+            "top_keywords": [],
+            "keyword_density": {},
+            "summary": "Insufficient text content for meaningful keyword analysis.",
+            "gist": "Not enough text content.",
+            "seo_suggestions": {"suggested_keywords": [], "guidelines": ["Add more relevant content to the page."]} ,
+            "error": "Insufficient text content."
             }
 
-    # 2. Clean Text for Analysis
-    cleaned_text_string, cleaned_words_list = clean_text_for_keywords(original_text)
-    if not cleaned_words_list:
-         return {
-            "error": "Text content found, but contained primarily stopwords or non-alphanumeric characters.",
-             "analysis_time_seconds": round(time.time() - start_time, 2)
-            }
+    # --- Calculate Term Frequencies (TF) for words and phrases ---
+    word_freq = Counter(filtered_tokens)
+    bigram_freq = Counter(get_ngrams(filtered_tokens, 2))
+    trigram_freq = Counter(get_ngrams(filtered_tokens, 3))
+
+    # Combine frequencies (simple approach: sum counts, could be weighted)
+    combined_freq = Counter()
+    combined_freq.update({word: count for word, count in word_freq.items()})
+    combined_freq.update({gram: count for gram, count in bigram_freq.items() if count > 1}) # Require bigrams to appear > once
+    combined_freq.update({gram: count for gram, count in trigram_freq.items() if count > 1}) # Require trigrams to appear > once
+
+    # Get top N keywords/phrases by frequency
+    top_n = 15
+    top_keywords_freq = dict(combined_freq.most_common(top_n))
+
+    # --- Calculate Keyword Density ---
+    total_words = len(tokens) # Use original token count before extensive filtering for density base
+    keyword_density = {}
+    if total_words > 0:
+        for keyword, count in top_keywords_freq.items():
+             # Count occurrences in the original cleaned text (case-insensitive) for density
+             occurrences = len(re.findall(r'\b' + re.escape(keyword) + r'\b', cleaned_text, re.IGNORECASE))
+             density = round((occurrences / total_words) * 100, 2) if total_words > 0 else 0
+             keyword_density[keyword] = f"{density}%"
 
 
-    # 3. Extract Keywords and Calculate Density/Scores
-    keywords_data, total_cleaned_words = extract_keywords_combined_v2(
-        original_text,
-        cleaned_text_string,
-        cleaned_words_list,
-        top_n=20 # Extract top 20 candidates
-        )
-
-    if not keywords_data:
-         return {
-            "error": "Could not extract significant keywords from the content.",
-            "total_words_analyzed": total_cleaned_words,
-             "analysis_time_seconds": round(time.time() - start_time, 2)
-            }
-
-    # 4. Generate SEO Suggestions based on keywords
-    seo_suggestions = generate_seo_suggestions_v2(keywords_data)
-
-    # 5. (Optional) Generate Content Summary (Simple extractive summary)
-    summary = ""
+    # --- Attempt TF-IDF (Optional complement/alternative) ---
+    # TF-IDF needs multiple documents (sentences) to be meaningful here
+    top_keywords_tfidf = {}
     try:
-        sentences = sent_tokenize(original_text) # Use original text for readable sentences
-        if len(sentences) > 3: # Only summarize if there are enough sentences
-             sentence_scores = {}
-             # Score sentences based on presence of top 5 keywords
-             top_5_kws = list(keywords_data.keys())[:5]
-             for sentence in sentences:
-                 score = 0
-                 sent_lower = sentence.lower()
-                 for kw in top_5_kws:
-                     if kw in sent_lower:
-                         # Use keyword score for weighting sentence score
-                         score += keywords_data[kw]['score']
-                 if score > 0:
-                      sentence_scores[sentence] = score
+        sentences = sent_tokenize(text_content) # Use original text for sentence context
+        if len(sentences) > 1: # Need more than one sentence for TF-IDF
+            vectorizer = TfidfVectorizer(
+                stop_words=list(stop_words_set),
+                ngram_range=(1, 3), # Consider 1, 2, and 3-word phrases
+                max_features=top_n,
+                max_df=0.85, # Ignore terms that appear in > 85% of sentences
+                min_df=1 # Must appear at least once
+            )
+            tfidf_matrix = vectorizer.fit_transform(sentences)
+            feature_names = vectorizer.get_feature_names_out()
+            # Aggregate scores across sentences (e.g., max or sum)
+            scores = tfidf_matrix.max(axis=0).toarray().flatten() # Max TF-IDF score for each term across all sentences
+            top_keywords_tfidf = {feature_names[i]: round(scores[i], 3) for i in scores.argsort()[-top_n:][::-1] if scores[i] > 0}
+    except ValueError as e:
+        print(f"TF-IDF calculation warning: {e}") # Often happens with very short/uniform text
+        # Fallback to frequency already handled
 
-             # Get top 3 sentences based on score
-             summary_sentences = nlargest(3, sentence_scores.items(), key=lambda item: item[1])
-             summary = ' '.join([s[0] for s in summary_sentences])
-        else:
-            summary = "Content too short to summarize meaningfully."
-
-    except Exception as e:
-        summary = f"Could not generate summary: {e}"
+    # Decide which keywords to prioritize (e.g., TF-IDF if available, else frequency)
+    final_top_keywords = top_keywords_tfidf if top_keywords_tfidf else top_keywords_freq
+     # Format for output
+    formatted_keywords = [{"keyword": kw, "score": score} for kw, score in final_top_keywords.items()]
 
 
-    # 6. Format Output
-    # Sort keywords by score for the final output
-    sorted_keywords_output = sorted(keywords_data.items(), key=lambda item: item[1]['score'], reverse=True)
+    # --- Generate Summary (Extractive based on keywords) ---
+    sentences = sent_tokenize(text_content)
+    sentence_scores = Counter()
+    keywords_for_summary = list(final_top_keywords.keys())[:5] # Use top 5 for summary scoring
+
+    for sentence in sentences:
+        score = 0
+        for keyword in keywords_for_summary:
+            if keyword in sentence.lower():
+                 # Simple scoring: +1 per keyword match per sentence
+                 score += sentence.lower().count(keyword)
+                 # Optional: Weight longer keywords more, or TF-IDF scores
+        if score > 0:
+             sentence_scores[sentence] = score
+
+    # Select top ~3 sentences for summary
+    num_summary_sentences = min(3, len(sentence_scores))
+    summary_sentences = [sent for sent, score in sentence_scores.most_common(num_summary_sentences)]
+    summary = " ".join(summary_sentences) if summary_sentences else "Could not generate summary."
+
+    # --- Dynamic SEO Suggestions ---
+    seo_suggestions_list = []
+    top_5_keys = list(final_top_keywords.keys())[:5]
+    if top_5_keys:
+        # Suggest long-tail variations (simple patterns)
+        seo_suggestions_list.extend([f"Best {kw} strategies", f"How to use {kw} effectively", f"{kw} benefits"] for kw in top_5_keys[:3])        # Suggest content ideas
+        seo_suggestions_list.append(f"Consider writing about '{top_5_keys[0]} vs {top_5_keys[1]}'") # Example comparison post
+        seo_suggestions_list.append(f"Create an 'Ultimate Guide to {top_5_keys[0]}'") # Example guide post
+    else:
+        seo_suggestions_list.append("Identify primary and secondary keywords for this page's topic.")
+
+    guidelines = [
+        "Integrate top keywords naturally into the Title, H1, meta description, body text, and image alt text.",
+        "Aim for a natural keyword density (typically 1-2% for primary keywords, avoid stuffing).",
+        "Use a mix of short-tail and long-tail keywords.",
+        "Focus on user intent and providing valuable content around these topics.",
+        "Internal linking: Link relevant keywords to other related pages on your site."
+    ]
 
     return {
-        "top_keywords": [{"keyword": kw, **data} for kw, data in sorted_keywords_output],
-        "total_words_analyzed": total_cleaned_words,
-        "content_summary": summary,
-        "seo_suggestions": seo_suggestions,
-        "analysis_time_seconds": round(time.time() - start_time, 2)
+        "top_keywords": formatted_keywords, # List of {"keyword": kw, "score": score}
+        "keyword_density": keyword_density, # Dict of {keyword: "density%"}
+        "summary": summary,
+        "gist": f"The page appears to focus on: {', '.join(top_5_keys)}." if top_5_keys else "Could not determine main topics.",
+        "seo_suggestions": {
+            "suggested_keywords_ideas": seo_suggestions_list,
+            "guidelines": guidelines
+        },
+        "error": None # Clear previous error if successful
     }
 
 
-
-# 9. Anchor Tag Suggestions (No changes needed)
+# 9. Anchor Tag Analysis
 def analyze_anchor_tags(page_content):
+    """
+    Analyzes anchor text for generic phrases and counts internal/external links.
+    """
     soup = BeautifulSoup(page_content, 'html.parser')
-    anchor_tags = soup.find_all('a', href=True) # Ensure they have href
-    issues = []
-    generic_texts = {"click here", "read more", "learn more", "here", "link", "download", "more info", ""}
-    empty_anchors = 0
-    generic_anchors = 0
-    total_anchors = len(anchor_tags)
+    anchor_tags = soup.find_all('a', href=True)
+    total_anchors = 0
+    generic_anchors = []
+    internal_links = 0
+    external_links = 0
+    missing_text_anchors = 0
+
+    # Get base URL to distinguish internal/external
+    base_url_tag = soup.find('base', href=True)
+    base_url = base_url_tag['href'] if base_url_tag else None
+    # If no <base>, try to infer from common tags (less reliable)
+    # This part requires the *actual* URL of the page being analyzed,
+    # which isn't passed to this function currently. Needs refactoring
+    # to pass the URL or derive it if needed for accurate internal/external split.
+    # For now, we'll focus on anchor text quality.
+
+    generic_texts = {"click here", "read more", "learn more", "here", "link", "download", "more info"}
 
     for anchor in anchor_tags:
-        text = anchor.get_text(strip=True)
-        href = anchor.get('href', '')
-        if not text:
-            empty_anchors += 1
-            issues.append(f"Empty anchor text for link: {href[:50]}...")
-        elif text.lower() in generic_texts:
-            generic_anchors += 1
-            issues.append(f"Generic anchor text '{text}' used for link: {href[:50]}...")
+         href = anchor.get('href', '')
+         text = anchor.get_text(strip=True).lower()
 
-    recommendation = f"Found {total_anchors} links. {empty_anchors} have empty anchor text and {generic_anchors} use generic text. Replace generic or empty anchor text with descriptive, keyword-rich phrases relevant to the linked page's content. This helps SEO and usability."
+         # Skip mailto, tel, javascript links etc.
+         if not href or urlparse(href).scheme in ['mailto', 'tel', 'javascript']:
+             continue
+
+         total_anchors += 1
+
+         if not text:
+             missing_text_anchors += 1
+             generic_anchors.append({"href": href, "text": "[NO TEXT]", "issue": "Anchor has no text"})
+         elif text in generic_texts:
+             generic_anchors.append({"href": href, "text": anchor.get_text(strip=True), "issue": "Generic anchor text"})
+
+         # Basic internal/external check (needs improvement with actual page URL)
+         parsed_href = urlparse(urljoin(base_url or '', href)) # Needs base_url!
+         if parsed_href.netloc and base_url and parsed_href.netloc != urlparse(base_url).netloc:
+             external_links += 1
+         elif not parsed_href.netloc or (base_url and parsed_href.netloc == urlparse(base_url).netloc):
+             internal_links += 1
+         else: # Could be relative link without base url known
+             internal_links += 1 # Assume internal if domain unclear
+
+
+    suggestions = []
+    if generic_anchors:
+        suggestions.append(f"Found {len(generic_anchors)} links with generic or missing anchor text (e.g., 'click here', empty). Replace these with descriptive text that includes relevant keywords about the linked page's topic.")
+    else:
+        suggestions.append("Anchor texts generally appear descriptive. Ensure they accurately reflect the linked content.")
+
+    suggestions.append("Good anchor text improves user experience and helps search engines understand the context of the linked page.")
+    suggestions.append("Balance internal and external links. Internal links help site navigation and spread link equity. Relevant external links can provide value to users.")
+    # Add suggestion about passing page URL for accurate internal/external count if needed.
+
 
     return {
         "total_anchors": total_anchors,
-        "empty_anchor_count": empty_anchors,
-        "generic_anchor_count": generic_anchors,
-        "issues": issues, # List specific issues found
-        "recommendation": recommendation
+        "generic_or_missing_anchors": generic_anchors, # List of dicts with details
+        "internal_link_count": internal_links, # Note: Accuracy depends on base URL knowledge
+        "external_link_count": external_links, # Note: Accuracy depends on base URL knowledge
+        "suggestion": suggestions
     }
 
 
-# 10. URL Structure Optimization (Minor improvements)
+# 10. URL Structure Optimization
 def analyze_url_structure(url):
-    try:
-        parsed_url = urlparse(url)
-        path = parsed_url.path
-        query = parsed_url.query
-        issues = []
-        status = "Optimized"
-
-        # Check length (common recommendation: < 75-100 chars, 60 is quite strict)
-        if len(url) > 100:
-            status = "Warning"
-            issues.append(f"URL length ({len(url)} chars) is quite long. Shorter URLs are often preferred.")
-
-        # Check path structure
-        if path and path != '/':
-             # Check for underscores (hyphens preferred)
-             if '_' in path:
-                  status = "Warning"
-                  issues.append("URL path contains underscores ('_'). Hyphens ('-') are generally preferred for word separation.")
-             # Check for excessive parameters in path (less common, but possible)
-             if path.count('/') > 5: # Arbitrary depth limit
-                  issues.append("URL path seems deep (many '/'). Consider flatter structure if possible.")
-             # Check for file extensions (e.g., .html, .php) - often better without
-             if re.search(r'\.\w{2,4}$', path): # Matches .xx, .xxx, .xxxx at the end
-                 issues.append("URL path includes a file extension. Consider configuring server to remove them for cleaner URLs.")
-             # Check for case sensitivity issues (lowercase preferred)
-             if any(c.isupper() for c in path):
-                  status = "Warning"
-                  issues.append("URL path contains uppercase letters. Using lowercase only is recommended to avoid duplicate content issues.")
-
-        # Check query parameters
-        if query:
-            params = query.split('&')
-            if len(params) > 3:
-                status = "Warning"
-                issues.append(f"URL has {len(params)} query parameters. Excessive parameters can sometimes hinder crawling or indicate non-canonical URLs.")
-            # Check for overly long parameters
-            if any(len(p) > 50 for p in params):
-                 issues.append("URL contains very long query parameters.")
-
-        recommendation = "Aim for short, descriptive, lowercase URLs using hyphens for word separation. Avoid unnecessary parameters or file extensions. Ensure URLs clearly reflect the page hierarchy/content."
-        if status != "Optimized":
-             recommendation += " Address the specific issues noted above."
-
-        return {
-            "url": url,
-            "status": status,
-            "path": path,
-            "query_params": query,
-            "issues": issues,
-            "recommendation": recommendation
-        }
-    except Exception as e:
-         return {"error": f"Failed to analyze URL structure: {str(e)}"}
-
-
-# 11. Robots.txt Validation (No changes needed)
-def validate_robots_txt(url):
+    """
+    Analyzes the structure of the given URL path.
+    """
     parsed_url = urlparse(url)
-    # Ensure scheme and netloc are present
-    if not parsed_url.scheme or not parsed_url.netloc:
-        return {"error": "Invalid URL provided for robots.txt check."}
+    path = parsed_url.path
+    issues = []
+    suggestions = []
 
-    robots_url = urljoin(f"{parsed_url.scheme}://{parsed_url.netloc}", "/robots.txt")
+    # Check length (recommendation varies, ~75 chars is a reasonable guideline)
+    max_len = 75
+    if len(url) > max_len: # Check full URL length as well
+        issues.append(f"URL length ({len(url)} chars) is quite long (over {max_len}). Shorter URLs are often preferred.")
+
+    # Check path specifics
+    if path and path != '/': # Ignore root path
+        # Check for characters to avoid
+        if any(c in path for c in ['_', ' ', '%20']):
+             issues.append("URL path contains underscores, spaces, or encoded spaces ('%20').")
+             suggestions.append("Use hyphens (-) instead of underscores (_) or spaces to separate words in URLs for better readability and SEO.")
+
+        # Check for excessive parameters (simple check)
+        if len(parsed_url.query) > 50: # Arbitrary threshold
+             issues.append("URL has many parameters, which can sometimes make it less user-friendly or crawlable.")
+             suggestions.append("Consider using shorter, descriptive URL paths (rewriting) instead of relying heavily on parameters where possible.")
+
+        # Check depth (simple slash count)
+        depth = path.strip('/').count('/')
+        if depth > 4: # Arbitrary depth threshold
+             issues.append(f"URL path depth ({depth} levels) seems high. Deeply nested pages might be harder for users and crawlers to find.")
+             suggestions.append("Aim for a flatter site structure where practical. Ensure important pages are reachable within a few clicks from the homepage.")
+
+        # Check for file extensions (often better to omit)
+        if re.search(r'\.(html|htm|php|asp|aspx)$', path):
+             issues.append("URL includes a file extension (e.g., .html, .php).")
+             suggestions.append("Consider configuring your server to remove file extensions from URLs for a cleaner look.")
+
+    if not issues:
+        suggestions.append("URL structure appears reasonable. Ensure it is descriptive, uses hyphens for word separation, and avoids excessive length or parameters.")
+    else:
+        suggestions.append("Review the URL structure based on the identified issues. Aim for clean, logical, and user-friendly URLs.")
+
+    return {
+        "url": url,
+        "path": path,
+        "query_params": parsed_url.query,
+        "issues": issues,
+        "suggestions": suggestions
+        }
+
+
+# 11. Robots.txt Validation
+def validate_robots_txt(url):
+    """
+    Checks for the presence and accessibility of robots.txt.
+    """
+    parsed_url = urlparse(url)
+    base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
+    robots_url = urljoin(base_url, "/robots.txt")
     status = "Unknown"
     content = None
-    issues = []
-    recommendation = ""
+    error = None
+    suggestions = []
 
     try:
-        headers = {'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'} # Simulate Googlebot
-        response = requests.get(robots_url, headers=headers, timeout=10)
-
+        response = requests.get(robots_url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
         if response.status_code == 200:
-            status = "Exists"
+            status = "Exists and Accessible"
             content = response.text
-            # Basic validation checks
-            if not content.strip():
-                 issues.append("robots.txt exists but is empty.")
-            if "User-agent: *" not in content and "User-agent: Googlebot" not in content:
-                 issues.append("No specific rules found for major crawlers like '*' or 'Googlebot'.")
-            # Check for potential blocking of important resources (basic check)
-            if re.search(r"Disallow:\s*/\s*$", content, re.MULTILINE):
-                 issues.append("Found 'Disallow: /', which blocks the entire site. Verify this is intended.")
-            recommendation = "robots.txt found. Review its rules to ensure necessary content is crawlable and sensitive areas are disallowed. Check Google Search Console for crawl errors related to robots.txt."
+            # Basic checks within the content
+            if "Disallow: /" in content.replace(" ", ""): # Basic check for disallowing everything
+                 suggestions.append("Warning: Found 'Disallow: /' which blocks all standard crawlers. Ensure this is intended.")
+            if "User-agent: *" not in content:
+                 suggestions.append("Consider adding a 'User-agent: *' section to apply rules to all standard crawlers, unless specific targeting is needed.")
+            if "Sitemap:" not in content:
+                 suggestions.append("Consider adding a 'Sitemap:' directive pointing to your XML sitemap location for better discovery.")
+            else:
+                 suggestions.append("Robots.txt exists and contains rules. Review its directives (Allow, Disallow, Crawl-delay) to ensure they align with your crawling strategy.")
 
         elif response.status_code == 404:
-            status = "Missing"
-            recommendation = "No robots.txt file found (404 error). Create one to guide search engine crawlers. If you want everything crawled, an empty file or one allowing all is fine."
+            status = "Missing (404 Not Found)"
+            suggestions.append("Create a robots.txt file at the root of your domain to guide search engine crawlers. Even an empty file or one allowing all access (`User-agent: *\\nAllow: /`) is better than none.")
         else:
-            status = f"Error ({response.status_code})"
-            recommendation = f"Could not fetch robots.txt. Server returned status code {response.status_code}. Ensure the file is accessible."
+            status = f"Exists but Inaccessible (Status: {response.status_code})"
+            suggestions.append(f"Robots.txt exists but returned status {response.status_code}. Ensure it's publicly accessible with a 200 OK status.")
+            error = f"Received status code {response.status_code}"
 
     except requests.exceptions.Timeout:
+         error = f"Timeout accessing {robots_url}"
          status = "Error (Timeout)"
-         recommendation = "Request timed out trying to fetch robots.txt."
+         suggestions.append(f"Could not access robots.txt due to a timeout. Check server responsiveness.")
     except requests.exceptions.RequestException as e:
-        status = f"Error (Request Failed)"
-        recommendation = f"Failed to fetch robots.txt: {str(e)}. Check DNS or network connectivity."
+        error = f"Failed to check robots.txt: {str(e)}"
+        status = "Error (Request Failed)"
+        suggestions.append(f"Could not access robots.txt due to a network error ({error}). Verify the URL and server status.")
     except Exception as e:
-        status = f"Error (Unexpected)"
-        recommendation = f"An unexpected error occurred checking robots.txt: {str(e)}"
-
+        error = f"An unexpected error occurred: {str(e)}"
+        status = "Error (Unexpected)"
 
     return {
         "robots_url": robots_url,
         "status": status,
-        "content": content, # Include content only if found
-        "issues": issues,
-        "recommendation": recommendation
+        "content": content, # Be careful displaying full content in UI if sensitive
+        "error": error,
+        "suggestions": suggestions
         }
 
 
-# 12. XML Sitemap Validation (Basic check)
+# 12. XML Sitemap Validation
 def validate_sitemap(url):
+    """
+    Checks for common XML sitemap locations (sitemap.xml).
+    """
     parsed_url = urlparse(url)
-    if not parsed_url.scheme or not parsed_url.netloc:
-        return {"error": "Invalid URL provided for sitemap check."}
-
     base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
     # Common sitemap locations
     sitemap_locations = [
         urljoin(base_url, "/sitemap.xml"),
         urljoin(base_url, "/sitemap_index.xml"), # Common for index files
-        urljoin(base_url, "/sitemap.php"), # Less common, but possible
-        urljoin(base_url, "/sitemap.txt"), # Plain text sitemap
     ]
-
     found_sitemap_url = None
-    status = "Missing"
-    error_message = None
-    content_preview = None
+    status = "Not Found"
+    error = None
+    suggestions = []
 
-    # Check robots.txt first for sitemap directive
-    robots_info = validate_robots_txt(url) # Reuse robots check
-    if robots_info and 'content' in robots_info and robots_info['content']:
-         sitemap_directives = re.findall(r'^\s*Sitemap:\s*(.*)', robots_info['content'], re.IGNORECASE | re.MULTILINE)
-         if sitemap_directives:
-              # Add URLs from robots.txt to the beginning of the check list
-              sitemap_locations = [url.strip() for url in sitemap_directives] + sitemap_locations
-              sitemap_locations = list(dict.fromkeys(sitemap_locations)) # Deduplicate
-
-
-    headers = {'User-Agent': 'Mozilla/5.0'}
     for sitemap_url in sitemap_locations:
         try:
-            response = requests.get(sitemap_url, headers=headers, timeout=10)
+            response = requests.head(sitemap_url, headers=HEADERS, timeout=REQUEST_TIMEOUT) # HEAD request first
             if response.status_code == 200:
-                 # Basic check if it looks like XML (or text for .txt)
-                 content_type = response.headers.get('Content-Type', '').lower()
-                 is_xml = 'xml' in content_type
-                 is_text = 'text/plain' in content_type
-                 is_likely_sitemap = is_xml or (is_text and sitemap_url.endswith('.txt'))
-
-                 if is_likely_sitemap and len(response.content) > 10: # Check if not empty
-                    status = "Exists"
-                    found_sitemap_url = sitemap_url
-                    content_preview = response.text[:200] + "..." # Get a preview
-                    break # Stop after finding the first valid one
-            # Don't set error message yet, just continue checking other locations
-            # elif response.status_code != 404:
-            #      # Log other status codes if needed
-            #      pass
+                status = "Exists and Accessible"
+                found_sitemap_url = sitemap_url
+                suggestions.append(f"Sitemap found at {found_sitemap_url}. Ensure it's valid XML, up-to-date, and submitted to Google Search Console and Bing Webmaster Tools.")
+                suggestions.append("Regularly check the sitemap for errors (e.g., using Search Console's report).")
+                break # Found one, stop checking
+            elif response.status_code == 404:
+                continue # Try next location
+            else:
+                 status = f"Error (Status: {response.status_code})"
+                 error = f"Received status code {response.status_code} for {sitemap_url}"
+                 suggestions.append(f"Checked {sitemap_url} but received status {response.status_code}. Ensure sitemaps are accessible.")
+                 # Don't break, maybe another location works
 
         except requests.exceptions.Timeout:
-             error_message = f"Timeout checking {sitemap_url}" # Record last error
+            error = f"Timeout accessing {sitemap_url}"
+            status = "Error (Timeout)"
+            suggestions.append(f"Could not access sitemap at {sitemap_url} due to a timeout.")
+            # Don't break, maybe another location works
         except requests.exceptions.RequestException as e:
-            error_message = f"Request Error checking {sitemap_url}: {type(e).__name__}" # Record last error
+            error = f"Failed to check sitemap at {sitemap_url}: {str(e)}"
+            status = "Error (Request Failed)"
+            suggestions.append(f"Could not access sitemap at {sitemap_url} due to a network error.")
+            # Don't break, maybe another location works
         except Exception as e:
-            error_message = f"Unexpected error checking {sitemap_url}: {str(e)}" # Record last error
+             error = f"An unexpected error occurred checking {sitemap_url}: {str(e)}"
+             status = "Error (Unexpected)"
 
-    recommendation = "An XML sitemap helps search engines discover all your important pages. Create one and submit it via Google Search Console. Ensure it's listed in your robots.txt file."
-    if status == "Exists":
-         recommendation = f"Sitemap found at {found_sitemap_url}. Ensure it's up-to-date, error-free (use validator tools), and submitted to search engines. Check Google Search Console for coverage status."
-    elif error_message:
-         recommendation += f" An error occurred during the check: {error_message}"
-
+    if not found_sitemap_url and status != "Error (Timeout)" and status != "Error (Request Failed)" and status != "Error (Unexpected)":
+        status = "Missing"
+        suggestions.append("No common sitemap (sitemap.xml, sitemap_index.xml) found at the root.")
+        suggestions.append("Create an XML sitemap to help search engines discover all important pages on your site. Include it in your robots.txt file and submit it to search consoles.")
 
     return {
+        "checked_locations": sitemap_locations,
         "status": status,
-        "checked_locations": sitemap_locations, # Show where it looked
         "found_sitemap_url": found_sitemap_url,
-        "content_preview": content_preview,
-        "error_message": error_message,
-        "recommendation": recommendation
-    }
-
-
-# 13. Blog Optimization (Requires `googlesearch` or alternative, kept structure but needs attention if used)
-# Note: This function uses the `googlesearch` library which can be unreliable and might get blocked.
-# Consider replacing with a different approach or official API if available.
-def analyze_blog_optimization(page_content, url):
-    """Analyzes blog title, H1s, and suggests improvements based on competitors."""
-    # !!! This function depends on the `googlesearch` library. Ensure it's installed
-    # and be aware of potential rate limiting or blocking by Google. !!!
-    try:
-        from googlesearch import search
-    except ImportError:
-        return {"error": "The 'google' package is required for blog optimization analysis but is not installed. Skipping."}
-
-
-    soup = BeautifulSoup(page_content, 'html.parser')
-    title = soup.find('title').get_text(strip=True) if soup.find('title') else "No title found"
-    h1_tags = [h1.get_text(strip=True) for h1 in soup.find_all('h1') if h1.get_text(strip=True)]
-    main_h1 = h1_tags[0] if h1_tags else None
-
-    if not main_h1:
-        return {
-            "current_title": title,
-            "h1_tags": h1_tags,
-            "warning": "No suitable H1 tag found for competitive title analysis.",
-            "summary": "Ensure the blog post has a clear H1 heading representing the main topic."
+        "error": error,
+        "suggestions": suggestions
         }
 
-    competitor_titles = []
-    google_suggested_titles = []
-    error_messages = []
 
-    # --- Competitor Analysis based on H1 ---
-    try:
-        # Search Google for the main H1 topic
-        query = f'"{main_h1}" blog post' # Search for the specific H1 phrase
-        print(f"Searching Google for: {query}")
-        # Use stop=5 instead of num_results, add pause to be polite
-        search_results = list(search(query, num=5, stop=5, pause=2.0, lang="en"))
+# 13. Blog Optimization (Reworked without scraping)
+def generate_title_suggestions(current_title, h1_texts, keywords):
+    """Generates title suggestions based on content and common patterns."""
+    suggestions = []
+    top_keywords = [kw['keyword'] for kw in keywords[:3]] # Use top 3 keywords
 
-        # Fetch titles from the search results
-        with ThreadPoolExecutor(max_workers=3) as executor:
-            future_to_url = {executor.submit(requests.get, result_url, timeout=7, headers={'User-Agent': 'Mozilla/5.0'}): result_url for result_url in search_results if url not in result_url} # Exclude self
+    # Suggestion 1: Enhance current title
+    if current_title and top_keywords:
+        suggestions.append(f"{current_title} | Key Insights on {top_keywords[0]}")
 
-            for future in as_completed(future_to_url):
-                result_url = future_to_url[future]
-                try:
-                    response = future.result()
-                    response.raise_for_status()
-                    if 'text/html' in response.headers.get('Content-Type', ''):
-                        result_soup = BeautifulSoup(response.text, 'html.parser')
-                        result_title = result_soup.find('title').get_text(strip=True) if result_soup.find('title') else None
-                        if result_title:
-                            google_suggested_titles.append(result_title)
-                except requests.exceptions.RequestException as e:
-                     error_messages.append(f"Error fetching competitor title from {result_url}: {type(e).__name__}")
-                except Exception as e:
-                     error_messages.append(f"Error processing competitor {result_url}: {str(e)}")
+    # Suggestion 2: Use H1 + Keyword
+    if h1_texts and top_keywords:
+        suggestions.append(f"{h1_texts[0]}: A Guide to {top_keywords[0]}")
 
-    except ImportError:
-         error_messages.append("Skipping Google search: 'google' package not installed.")
-    except Exception as e:
-         # Catch potential errors from googlesearch library (e.g., rate limiting)
-         error_messages.append(f"Error during Google search for competitors: {str(e)}")
+    # Suggestion 3: Common Patterns
+    if top_keywords:
+        suggestions.append(f"Ultimate Guide to {top_keywords[0]}")
+        suggestions.append(f"5 Tips for Effective {top_keywords[0]}")
+        if len(top_keywords) > 1:
+             suggestions.append(f"Understanding {top_keywords[0]} and {top_keywords[1]}")
+
+    # Ensure uniqueness and relevance
+    unique_suggestions = list(dict.fromkeys(suggestions)) # Remove duplicates
+    # Basic filtering (optional)
+    unique_suggestions = [s for s in unique_suggestions if len(s) < 70] # Keep reasonable length
+
+    return unique_suggestions[:5] # Return top 5
 
 
-    # --- Generate a Suggested Title ---
-    # Basic suggestion: Combine original title elements with common keywords from competitors
-    suggested_title = title # Default to original
-    if google_suggested_titles:
-         # Extract common words (excluding stopwords) from competitor titles
-         all_comp_words = []
-         comp_text = ' '.join(google_suggested_titles)
-         cleaned_comp_text, comp_words_list = clean_text_for_keywords(comp_text)
-         if comp_words_list:
-              word_counts = Counter(comp_words_list)
-              # Get top 2-3 most frequent non-stop words from competitor titles
-              top_comp_keywords = [kw[0] for kw in word_counts.most_common(3) if kw[0] not in ENGLISH_STOP_WORDS]
-              if top_comp_keywords:
-                  # Simple combination - might need more sophisticated logic
-                   suggested_title = f"{main_h1}: Guide with {', '.join(top_comp_keywords).title()}"
+def analyze_blog_optimization(page_content, url):
+    """
+    Analyzes blog post elements like title, H1, and suggests improvements
+    based on content keywords and patterns. No external scraping.
+    Relies on keyword analysis results from 'analyze_keyword_summary'.
+    """
+    soup = BeautifulSoup(page_content, 'html.parser')
+    title_tag = soup.find('title')
+    current_title = title_tag.get_text(strip=True) if title_tag else None
+    h1_tags = soup.find_all('h1')
+    h1_texts = [h1.get_text(strip=True) for h1 in h1_tags if h1.get_text(strip=True)]
+
+    # --- This function now implicitly relies on keywords found by ---
+    # --- analyze_keyword_summary. For a standalone version, keywords ---
+    # --- would need to be extracted here. We assume keywords are available ---
+    # --- from the main analysis dictionary later. ---
+    # --- As a fallback, do a mini-extraction here if needed, but ideally use the main result ---
+    keyword_info = analyze_keyword_summary(page_content) # Re-run (inefficient) or get from main results
+    top_keywords = keyword_info.get("top_keywords", [])
+
+    suggested_titles = []
+    if current_title or h1_texts:
+        suggested_titles = generate_title_suggestions(current_title, h1_texts, top_keywords)
+
+    suggestions = []
+    if not current_title:
+         suggestions.append("Page is missing a <title> tag. Add a compelling title reflecting the content.")
+    if not h1_texts:
+         suggestions.append("Page is missing an H1 tag. Add a primary H1 heading that matches the main topic.")
+    elif len(h1_texts) > 1:
+         suggestions.append("Multiple H1 tags found. Use only one H1 for the main title of the blog post.")
+
+    if current_title and h1_texts and current_title.lower() != h1_texts[0].lower():
+        suggestions.append("The Title tag and H1 tag differ. Ensure both accurately represent the content and include primary keywords, though they don't have to be identical.")
+
+    if suggested_titles:
+        suggestions.append("Consider the suggested titles, which incorporate keywords found in the content and follow common engaging patterns.")
+    else:
+        suggestions.append("Focus on crafting a clear, keyword-rich title and H1 tag that accurately reflect the blog post's main topic.")
+
+    suggestions.append("Ensure your blog post content is well-structured with subheadings (H2, H3), provides value, and naturally incorporates relevant keywords.")
 
 
     return {
-        "current_title": title,
-        "h1_tags": h1_tags,
-        "analysis_based_on_h1": main_h1,
-        "competitor_titles_found": len(google_suggested_titles),
-        # "google_suggested_titles": google_suggested_titles, # Can be very long
-        "suggested_title_based_on_competitors": suggested_title,
-        "errors": error_messages,
-        "summary": "Analyze competitor titles for similar topics (using H1 as a base). Consider incorporating common relevant terms found in top-ranking competitor titles into your own title and headings, while keeping it unique and compelling."
+        "current_title": current_title,
+        "h1_tags": h1_texts,
+        "suggested_titles": suggested_titles, # Based on content keywords/patterns
+        # "competitor_titles": [], # Removed - unreliable without search/scraping
+        # "google_suggested_titles": [], # Removed - unreliable without search/scraping
+        "suggestions": suggestions
     }
 
-# --- Index View ---
-def index(request):
-    return render(request, 'index.html') # Make sure 'index.html' exists in your templates folder
+# 14. HTML Structure Analysis (New)
+def analyze_html_structure(page_content):
+    """
+    Analyzes the use of semantic HTML5 elements and heading structure logic.
+    """
+    soup = BeautifulSoup(page_content, 'html.parser')
+    issues = []
+    suggestions = []
+    semantic_tags_found = []
+
+    # Check for key HTML5 semantic elements
+    semantic_tags = ['header', 'nav', 'main', 'article', 'aside', 'footer', 'section']
+    for tag_name in semantic_tags:
+        if soup.find(tag_name):
+            semantic_tags_found.append(tag_name)
+
+    if not semantic_tags_found:
+        suggestions.append("Consider using HTML5 semantic tags like <header>, <nav>, <main>, <article>, <aside>, <footer> to improve document structure and accessibility.")
+    elif 'main' not in semantic_tags_found:
+        suggestions.append("Consider wrapping the main content of the page within a <main> tag.")
+    else:
+         suggestions.append(f"Found semantic tags: {', '.join(semantic_tags_found)}. Using these tags helps define the structure for assistive technologies and search engines.")
+
+    # Heading structure check (already partially done in analyze_on_page_optimization, refined here)
+    headings = soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
+    last_level = 0
+    h1_found = False
+    for heading in headings:
+         try:
+            level = int(heading.name[1])
+            if level == 1: h1_found = True
+            if level > last_level + 1:
+                 issue_text = f"Heading level skipped: Found <{heading.name}> after <h{last_level}>."
+                 if issue_text not in issues: # Avoid duplicate messages
+                      issues.append(issue_text)
+            last_level = level
+         except (ValueError, IndexError):
+             continue # Ignore malformed heading tags like <h7>
+
+    if not h1_found:
+         if "Missing H1 tag." not in issues: # Avoid duplicate messages
+             issues.append("Missing H1 tag.")
+
+    if issues:
+        suggestions.append("Review heading hierarchy (H1-H6). Headings should form a logical outline without skipping levels (e.g., don't jump from H2 to H4). Use only one H1.")
+    else:
+        suggestions.append("Heading structure appears logical.")
+
+    # Basic check for alt text on images
+    images = soup.find_all('img')
+    missing_alt_count = 0
+    for img in images:
+        alt_text = img.get('alt')
+        if alt_text is None: # alt attribute missing entirely
+            missing_alt_count += 1
+        elif not alt_text.strip() and not img.has_attr('role') == 'presentation': # alt is empty, and not decorative
+            # Check if it's likely decorative based on heuristics (e.g. spacer.gif) - simplistic
+            src = img.get('src', '').lower()
+            if 'spacer' not in src and 'transparent' not in src:
+                 missing_alt_count += 1
+
+
+    if missing_alt_count > 0:
+         issues.append(f"Found {missing_alt_count} images missing descriptive alt text.")
+         suggestions.append("Add descriptive alt text to all meaningful images. For purely decorative images, use an empty alt attribute (alt=\"\"). Alt text improves accessibility and SEO.")
+
+    return {
+        "semantic_tags_found": semantic_tags_found,
+        "heading_structure_issues": issues,
+        "images_missing_alt": missing_alt_count,
+        "suggestions": suggestions
+    }
+
+# 15. DA/PA/Spam Score Placeholder (New)
+def analyze_da_pa_spam(url):
+    """
+    Placeholder function explaining that DA/PA/Spam Score require external tools/APIs.
+    """
+    explanation = (
+        "Domain Authority (DA), Page Authority (PA), and Spam Score are metrics developed by Moz "
+        "(or similar metrics by other providers like SEMrush). Accurate calculation requires access "
+        "to their extensive link indexes and proprietary algorithms."
+    )
+    suggestion = (
+        "To check these scores, use dedicated SEO tools like Moz Link Explorer, SEMrush, Ahrefs, etc. "
+        "These metrics are not directly provided by search engines and cannot be reliably calculated "
+        "without these external services/APIs (which often require subscriptions)."
+    )
+
+    return {
+        "Domain_Authority": "N/A (Requires External Tool/API)",
+        "Page_Authority": "N/A (Requires External Tool/API)",
+        "Spam_Score": "N/A (Requires External Tool/API)",
+        "explanation": explanation,
+        "suggestion": suggestion
+    }
+
