@@ -1,15 +1,11 @@
 
 from django.http import JsonResponse
 from django.shortcuts import render
-# Removed unused import: from pypsrp import FEATURES
-# Removed unused import: from .models import * # Assuming models aren't used in this specific view
 import requests
 from bs4 import BeautifulSoup
 import json
 from urllib.parse import urlparse, urljoin
 import os
-from openai import OpenAI # Keep if needed elsewhere, but not used in provided functions
-# client = OpenAI(api_key='YOUR_SECURE_API_KEY') # Use environment variables for keys!
 
 from textstat import flesch_reading_ease
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -19,11 +15,9 @@ from nltk.corpus import stopwords
 from nltk.tokenize import sent_tokenize, word_tokenize
 from nltk import ngrams # For keyword phrase extraction
 from collections import Counter
-# Removed unused import: from heapq import nlargest # Replaced with Counter.most_common
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
-# Removed unreliable scraping: from googlesearch import search
+import asyncio
 from transformers import T5ForConditionalGeneration, T5Tokenizer # For AI detection
 
 # --- NLTK Data Downloads (Ensure these run successfully) ---
@@ -34,29 +28,30 @@ except nltk.downloader.DownloadError:
     nltk.download('punkt')
 try:
     nltk.data.find('corpora/stopwords')
+    print("STOPWRODS DOWNLOADED")
 except nltk.downloader.DownloadError:
     nltk.download('stopwords')
 # -----------------------------------------------------------
 
 # --- Constants ---
 # Use environment variables for API keys in production!
+serpapi_key = "4f40c394632e672b6192e71ff553f0ae675da0e8140f3d5e5a899b94e218fd28"
 PAGESPEED_API_KEY = os.environ.get('PAGESPEED_API_KEY', 'AIzaSyCzMj9hqnN8lSmMIc2vMQZ2mC9N-AcNvcQ') # Example fallback
-PAGESPEED_TIMEOUT = 90
+PAGESPEED_TIMEOUT = 500
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
 }
-REQUEST_TIMEOUT = 10 # Timeout for external requests in seconds
+REQUEST_TIMEOUT = 500 # Timeout for external requests in seconds
 
 # --- Main View ---
 def index(request):
     return render(request, 'index.html')
 
-def analyze_page(request):
+async def analyze_page(request):
     start_time = time.time() # Record the start time
 
     if request.method == 'GET':
         url = request.GET.get('url')
-
         if not url or not url.startswith(('http://', 'https://')):
             return JsonResponse({"error": "A valid URL starting with http:// or https:// is required."})
 
@@ -87,46 +82,56 @@ def analyze_page(request):
 
         analysis_results = {}
 
-        # Use ThreadPoolExecutor to run analyses in parallel
-        with ThreadPoolExecutor(max_workers=10) as executor: # Adjust max_workers based on resources
-            # Submit tasks - pass content or URL as needed
-            future_to_analysis = {
-                executor.submit(analyze_on_page_optimization, page_content): 'on_page_optimization',
-                executor.submit(analyze_h1_tag, page_content): 'h1_tag',
-                executor.submit(validate_schema, page_content): 'schema_validation',
-                executor.submit(detect_ai_content, page_content): 'ai_content_detection', # Potentially slow
-                executor.submit(analyze_page_speed, url): 'page_speed',
-                executor.submit(check_meta_tags, page_content): 'meta_tags',
-                executor.submit(analyze_keyword_summary, page_content): 'keyword_summary', # Enhanced
-                executor.submit(analyze_anchor_tags, page_content): 'anchor_tags',
-                executor.submit(analyze_url_structure, url): 'url_structure',
-                executor.submit(validate_robots_txt, url): 'robots_txt',
-                executor.submit(validate_sitemap, url): 'xml_sitemap',
-                executor.submit(analyze_blog_optimization, page_content, url): 'blog_optimization', # Reworked
-                executor.submit(detect_broken_urls, url): 'detect_broken_urls', # Returns only broken
-                executor.submit(analyze_html_structure, page_content): 'html_structure', # New
-                executor.submit(analyze_da_pa_spam, url): 'da_pa_spam_score' # New (Placeholder)
-            }
+        try:
+            # Define all analysis functions with their respective arguments
+            functions_with_args = [
+                (analyze_on_page_optimization, [page_content]),
+                (analyze_h1_tag, [page_content]),
+                (validate_schema, [page_content]),
+                (detect_ai_content, [page_content]),
+                (analyze_page_speed, [url]),
+                (check_meta_tags, [page_content]),
+                (analyze_keyword_summary, [page_content]),
+                (analyze_anchor_tags, [page_content]),
+                (analyze_url_structure, [url]),
+                (validate_robots_txt, [url]),
+                (validate_sitemap, [url]),
+                (analyze_blog_optimization, [page_content, url]),
+                (detect_broken_urls, [url]),
+                (analyze_html_structure, [page_content]),
+                (analyze_da_pa_spam, [url]),
+            ]
 
-            for future in as_completed(future_to_analysis):
-                analysis_name = future_to_analysis[future]
-                try:
-                    result = future.result()
-                    analysis_results[analysis_name] = result
-                except Exception as e:
-                    # Log the error for debugging
-                    print(f"Error in analysis '{analysis_name}': {str(e)}")
-                    analysis_results[analysis_name] = {"error": f"Analysis failed: {str(e)}"}
+            # Execute each analysis function in a thread pool
+            loop = asyncio.get_running_loop()
+            with ThreadPoolExecutor() as pool:
+                tasks = [
+                    loop.run_in_executor(pool, func, *args)
+                    for func, args in functions_with_args
+                ]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        end_time = time.time() # Record the end time
-        execution_time = end_time - start_time # Calculate the difference
+            keys = [
+                'on_page_optimization', 'h1_tag', 'schema_validation',
+                'ai_content_detection', 'page_speed', 'meta_tags',
+                'keyword_summary', 'anchor_tags', 'url_structure',
+                'robots_txt', 'xml_sitemap', 'blog_optimization',
+                'detect_broken_urls', 'html_structure', 'da_pa_spam_score'
+            ]
 
-        print(f"Analysis for {url} completed in {execution_time:.2f} seconds")
+            analysis_results = {}
+            for key, result in zip(keys, results):
+                if isinstance(result, Exception):
+                    print(f"Error in analysis '{key}': {result}")
+                    analysis_results[key] = {"error": str(result)}
+                else:
+                    analysis_results[key] = result
 
-        # Combine keyword results if needed (optional)
-        # For instance, pass keywords from analyze_keyword_summary to other functions
-        # if they require them and weren't passed initially.
-        # Example: analysis_results['on_page_optimization']['keyword_density'] = analysis_results['keyword_summary'].get('keyword_density', {})
+        except Exception as e:
+            return JsonResponse({"error": f"Unexpected error during analysis: {str(e)}"})
+
+        end_time = time.time()
+        print(f"Analysis for {url} completed in {end_time - start_time:.2f} seconds")
 
         return JsonResponse(analysis_results)
 
@@ -681,6 +686,20 @@ def clean_text_for_keywords(text):
 def get_ngrams(tokens, n):
     """Generates n-grams from a list of tokens."""
     return [" ".join(gram) for gram in ngrams(tokens, n)]
+def load_stopwords(custom_file_path):
+    # Load built-in stopwords
+    base_stopwords = set(stopwords.words('english'))
+    
+    # Load custom stopwords from file (one word per line)
+    try:
+        with open(custom_file_path, 'r') as f:
+            custom_words = {line.strip().lower() for line in f if line.strip()}
+        return base_stopwords.union(custom_words)
+    except FileNotFoundError:
+        print(f"Warning: Custom stopwords file not found at {custom_file_path}")
+        return base_stopwords
+STOP_WORDS_SET = load_stopwords("analyze/custom_stopwords.txt")
+print(STOP_WORDS_SET)
 
 def analyze_keyword_summary(page_content):
     """
@@ -694,13 +713,8 @@ def analyze_keyword_summary(page_content):
 
     cleaned_text = clean_text_for_keywords(text_content)
     tokens = word_tokenize(cleaned_text)
-    stop_words_set = set(stopwords.words('english'))
-    # Add custom irrelevant words if needed
-    custom_stops = {'use', 'like', 'get', 'also', 'make', 'one', 'may', 'need'}
-    stop_words_set.update(custom_stops)
-
-    filtered_tokens = [word for word in tokens if word not in stop_words_set and len(word) > 2]
-
+    filtered_tokens = [token for token in tokens if token.lower() not in STOP_WORDS_SET]
+    
     if not filtered_tokens or len(filtered_tokens) < 10: # Need enough content
         return {
             "top_keywords": [],
@@ -744,7 +758,7 @@ def analyze_keyword_summary(page_content):
         sentences = sent_tokenize(text_content) # Use original text for sentence context
         if len(sentences) > 1: # Need more than one sentence for TF-IDF
             vectorizer = TfidfVectorizer(
-                stop_words=list(stop_words_set),
+                stop_words=list(STOP_WORDS_SET),
                 ngram_range=(1, 3), # Consider 1, 2, and 3-word phrases
                 max_features=top_n,
                 max_df=0.85, # Ignore terms that appear in > 85% of sentences
@@ -1059,10 +1073,85 @@ def validate_sitemap(url):
 
 
 # 13. Blog Optimization (Reworked without scraping)
-def generate_title_suggestions(current_title, h1_texts, keywords):
-    """Generates title suggestions based on content and common patterns."""
+
+# ---- Google Search Integration ----
+
+def fetch_google_title_suggestions(keyword, serpapi_key):
+    """Fetches real-world title ideas using SerpApi Google Search."""
+    try:
+        params = {
+            "engine": "google",
+            "q": keyword,
+            "api_key": serpapi_key
+        }
+        url = "https://serpapi.com/search"
+        resp = requests.get(url, params=params)
+        resp.raise_for_status()
+        results = resp.json()
+
+        # Extract titles from organic results
+        items = results.get('organic_results', [])
+        titles = [item.get('title') for item in items if 'title' in item]
+        print("SERP TITLES", titles)
+        return titles[:5]  # Limit to top 5 titles
+    except Exception as e:
+        print(f"SerpApi error: {e}")
+        return []
+
+
+
+def analyze_blog_optimization(page_content, url, api_key=None, cx=None):
+    """
+    Analyzes blog content and suggests improvements using keywords and optionally Google API.
+    """
+    soup = BeautifulSoup(page_content, 'html.parser')
+    title_tag = soup.find('title')
+    current_title = title_tag.get_text(strip=True) if title_tag else None
+    h1_tags = soup.find_all('h1')
+    h1_texts = [h1.get_text(strip=True) for h1 in h1_tags if h1.get_text(strip=True)]
+
+    # Use local keyword analysis
+    keyword_info = analyze_keyword_summary(page_content)
+    top_keywords = keyword_info.get("top_keywords", [])
+
+    # Fetch external suggestions if API key provided
+    google_titles = []
+    if top_keywords and api_key:
+        google_titles = fetch_google_title_suggestions(top_keywords[0]['keyword'], serpapi_key)
+        print("GOOGLE TITLE", google_titles)
+
+    # Generate suggestions
+    suggested_titles = generate_title_suggestions(current_title, h1_texts, top_keywords, google_titles)
+    print(suggested_titles)
     suggestions = []
-    top_keywords = [kw['keyword'] for kw in keywords[:3]] # Use top 3 keywords
+    if not current_title:
+        suggestions.append("Page is missing a <title> tag. Add a compelling title reflecting the content.")
+    if not h1_texts:
+        suggestions.append("Page is missing an H1 tag. Add a primary H1 heading that matches the main topic.")
+    elif len(h1_texts) > 1:
+        suggestions.append("Multiple H1 tags found. Use only one H1 for the main title of the blog post.")
+
+    if current_title and h1_texts and current_title.lower() != h1_texts[0].lower():
+        suggestions.append("The Title tag and H1 tag differ. Ensure both accurately represent the content and include primary keywords.")
+
+    if suggested_titles:
+        suggestions.append("Consider the suggested titles, which incorporate real-world search patterns and content-relevant keywords.")
+    else:
+        suggestions.append("Focus on crafting a clear, keyword-rich title and H1 tag that accurately reflect the blog post's main topic.")
+
+    suggestions.append("Ensure your blog post is well-structured with subheadings (H2, H3) and naturally incorporates keywords.")
+
+    return {
+        "current_title": current_title,
+        "h1_tags": h1_texts,
+        "suggested_titles": suggested_titles,
+        "suggestions": suggestions
+    }
+
+def generate_title_suggestions(current_title, h1_texts, keywords, google_titles=None):
+    """Generates title suggestions based on content, keywords, and optional API results."""
+    suggestions = []
+    top_keywords = [kw['keyword'] for kw in keywords[:3]]  # Use top 3 keywords
 
     # Suggestion 1: Enhance current title
     if current_title and top_keywords:
@@ -1074,71 +1163,20 @@ def generate_title_suggestions(current_title, h1_texts, keywords):
 
     # Suggestion 3: Common Patterns
     if top_keywords:
-        suggestions.append(f"Ultimate Guide to {top_keywords[0]}")
-        suggestions.append(f"5 Tips for Effective {top_keywords[0]}")
+        # suggestions.append(f"Ultimate Guide to {top_keywords[0]}")
+        # suggestions.append(f"5 Tips for Effective {top_keywords[0]}")
         if len(top_keywords) > 1:
-             suggestions.append(f"Understanding {top_keywords[0]} and {top_keywords[1]}")
+            suggestions.append(f"Understanding {top_keywords[0]} and {top_keywords[1]}")
 
-    # Ensure uniqueness and relevance
-    unique_suggestions = list(dict.fromkeys(suggestions)) # Remove duplicates
-    # Basic filtering (optional)
-    unique_suggestions = [s for s in unique_suggestions if len(s) < 70] # Keep reasonable length
+    # Add Google API titles if available
+    if google_titles:
+        suggestions.extend(google_titles)
 
-    return unique_suggestions[:5] # Return top 5
-
-
-def analyze_blog_optimization(page_content, url):
-    """
-    Analyzes blog post elements like title, H1, and suggests improvements
-    based on content keywords and patterns. No external scraping.
-    Relies on keyword analysis results from 'analyze_keyword_summary'.
-    """
-    soup = BeautifulSoup(page_content, 'html.parser')
-    title_tag = soup.find('title')
-    current_title = title_tag.get_text(strip=True) if title_tag else None
-    h1_tags = soup.find_all('h1')
-    h1_texts = [h1.get_text(strip=True) for h1 in h1_tags if h1.get_text(strip=True)]
-
-    # --- This function now implicitly relies on keywords found by ---
-    # --- analyze_keyword_summary. For a standalone version, keywords ---
-    # --- would need to be extracted here. We assume keywords are available ---
-    # --- from the main analysis dictionary later. ---
-    # --- As a fallback, do a mini-extraction here if needed, but ideally use the main result ---
-    keyword_info = analyze_keyword_summary(page_content) # Re-run (inefficient) or get from main results
-    top_keywords = keyword_info.get("top_keywords", [])
-
-    suggested_titles = []
-    if current_title or h1_texts:
-        suggested_titles = generate_title_suggestions(current_title, h1_texts, top_keywords)
-
-    suggestions = []
-    if not current_title:
-         suggestions.append("Page is missing a <title> tag. Add a compelling title reflecting the content.")
-    if not h1_texts:
-         suggestions.append("Page is missing an H1 tag. Add a primary H1 heading that matches the main topic.")
-    elif len(h1_texts) > 1:
-         suggestions.append("Multiple H1 tags found. Use only one H1 for the main title of the blog post.")
-
-    if current_title and h1_texts and current_title.lower() != h1_texts[0].lower():
-        suggestions.append("The Title tag and H1 tag differ. Ensure both accurately represent the content and include primary keywords, though they don't have to be identical.")
-
-    if suggested_titles:
-        suggestions.append("Consider the suggested titles, which incorporate keywords found in the content and follow common engaging patterns.")
-    else:
-        suggestions.append("Focus on crafting a clear, keyword-rich title and H1 tag that accurately reflect the blog post's main topic.")
-
-    suggestions.append("Ensure your blog post content is well-structured with subheadings (H2, H3), provides value, and naturally incorporates relevant keywords.")
-
-
-    return {
-        "current_title": current_title,
-        "h1_tags": h1_texts,
-        "suggested_titles": suggested_titles, # Based on content keywords/patterns
-        # "competitor_titles": [], # Removed - unreliable without search/scraping
-        # "google_suggested_titles": [], # Removed - unreliable without search/scraping
-        "suggestions": suggestions
-    }
-
+    # Ensure uniqueness and reasonable length
+    unique_suggestions = list(dict.fromkeys(suggestions))
+    filtered = [s for s in unique_suggestions if len(s) < 70]
+    
+    return filtered[:5]
 # 14. HTML Structure Analysis (New)
 def analyze_html_structure(page_content):
     """
