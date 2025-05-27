@@ -24,7 +24,7 @@ SECRET_KEY = 'django-insecure-9tgf!7lx0roj78dsm&2vpwr-@adyrl4j*f*vs$tkeq^&ksb25_
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ["*"]
 
 PAGESPEED_API_KEY = "AIzaSyCzMj9hqnN8lSmMIc2vMQZ2mC9N-AcNvcQ"
 SERPAPI_KEY = "4f40c394632e672b6192e71ff553f0ae675da0e8140f3d5e5a899b94e218fd28"
@@ -74,17 +74,13 @@ WSGI_APPLICATION = 'sitesense.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/4.2/ref/settings/#databases
 
+
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.mysql',
-        'NAME': 'sitesense',
-        'USER': 'root',
-        'PASSWORD': 'root',
-        'HOST': '127.0.0.1',
-        'PORT':'3306'
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': BASE_DIR / 'db.sqlite3',
     }
 }
-
 
 # Password validation
 # https://docs.djangoproject.com/en/4.2/ref/settings/#auth-password-validators
