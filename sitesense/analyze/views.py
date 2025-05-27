@@ -145,6 +145,7 @@ def analyze_on_page_optimization(content):
     """
     Analyzes heading structure (H1-H6). Keyword density is now handled in analyze_keyword_summary.
     """
+    print("On Page Optimization Running")
     soup = BeautifulSoup(content, 'html.parser')
     headings = soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
     heading_hierarchy = {'h1': [], 'h2': [], 'h3': [], 'h4': [], 'h5': [], 'h6': []}
@@ -195,6 +196,8 @@ def analyze_h1_tag(content):
     """
     Analyzes the H1 tag specifically against the title.
     """
+    print("H1 Tag Analysis Running")
+
     soup = BeautifulSoup(content, 'html.parser')
     h1_tags = soup.find_all('h1')
     title_tag = soup.find('title')
@@ -238,6 +241,8 @@ def validate_schema(page_content):
     Finds JSON-LD schema.org data and identifies its types.
     Does not perform full validation against schema.org standards.
     """
+    print("Schema Validation Running")
+
     soup = BeautifulSoup(page_content, 'html.parser')
     scripts = soup.find_all('script', type='application/ld+json')
     schemas = []
@@ -295,6 +300,8 @@ def preprocess_content(content):
     """
     Improved preprocessing to extract cleaner text content from HTML.
     """
+    print("AI Detection preprocess Running")
+
     soup = BeautifulSoup(content, 'html.parser')
 
     # Remove script and style elements
@@ -342,6 +349,8 @@ def detect_ai_content(content):
     Detects potential AI-like patterns and suggests rewrites using T5.
     NOTE: T5 inference can be slow and resource-intensive.
     """
+    print("AI Detection Running")
+
     performance_note = "AI detection using T5 model can be slow."
     clean_content = preprocess_content(content)
 
@@ -445,6 +454,8 @@ def analyze_page_speed(url):
     """
     Analyzes page speed using Google PageSpeed Insights API.
     """
+    print("Page Speed Running")
+
     # Ensure API key is available
     if not PAGESPEED_API_KEY or PAGESPEED_API_KEY == 'YOUR_SECURE_API_KEY':
         return {"error": "PageSpeed API key is missing or not configured."}
@@ -515,6 +526,8 @@ def check_meta_tags(content):
     Checks for meta description and keywords (though keywords are less important now).
     Relies on analyze_keyword_summary for keyword suggestions.
     """
+    print("Meta Tag Analysis Running")
+
     soup = BeautifulSoup(content, 'html.parser')
 
     meta_desc_tag = soup.find('meta', attrs={'name': re.compile(r'^description$', re.I)})
@@ -582,6 +595,8 @@ def detect_broken_urls(url, max_threads=10):
     """
     Detects broken internal and external links on the page. Returns only broken URLs.
     """
+    print("Broken URL Detection Running")
+
     broken_urls_info = []
     processed_urls = set() # Avoid checking the same URL multiple times
 
@@ -669,6 +684,8 @@ def detect_broken_urls(url, max_threads=10):
 
 # 8. Keyword Analysis and Summary (Enhanced)
 def clean_text_for_keywords(text):
+    print("Content Cleaning Running")
+    
     """ More robust text cleaning for keyword analysis. """
     text = text.lower()
     # Remove HTML tags (redundant if using soup.get_text, but safe)
@@ -689,11 +706,14 @@ def get_ngrams(tokens, n):
 def load_stopwords(custom_file_path):
     # Load built-in stopwords
     base_stopwords = set(stopwords.words('english'))
+    print("Stop Words are loaded")
     
     # Load custom stopwords from file (one word per line)
     try:
+        print("loading Custom Stop words")
         with open(custom_file_path, 'r') as f:
             custom_words = {line.strip().lower() for line in f if line.strip()}
+            print("TEST STOP WORDS", base_stopwords.union(custom_words))
         return base_stopwords.union(custom_words)
     except FileNotFoundError:
         print(f"Warning: Custom stopwords file not found at {custom_file_path}")
@@ -703,132 +723,100 @@ print(STOP_WORDS_SET)
 
 def analyze_keyword_summary(page_content):
     """
-    Enhanced keyword analysis using NLTK, n-grams, frequency, and TF-IDF.
-    Calculates keyword density and generates a summary.
+    Enhanced keyword analysis using custom scoring aligned with Title, all Heading tags (H1-H6), and main body content.
     """
     soup = BeautifulSoup(page_content, 'html.parser')
-    # Extract text from meaningful tags, exclude nav/footer if possible
-    main_content = soup.find('main') or soup.find('article') or soup.find('body') # Prioritize main content areas
-    text_content = main_content.get_text(separator=" ", strip=True) if main_content else soup.get_text(separator=" ", strip=True)
+    main_content = soup.find('main') or soup.find('article') or soup.find('body')
+    body_text = main_content.get_text(separator=" ", strip=True) if main_content else soup.get_text(separator=" ", strip=True)
 
-    cleaned_text = clean_text_for_keywords(text_content)
+    # Extract title
+    title_text = soup.title.string.strip() if soup.title else ""
+
+    # Extract meta description
+    meta_desc = soup.find("meta", attrs={"name": "description"})
+    meta_description = meta_desc['content'].strip() if meta_desc and 'content' in meta_desc.attrs else ""
+
+    # Extract all headings h1 to h6
+    heading_tags = [f"h{i}" for i in range(1, 7)]
+    all_headings = [tag.get_text(strip=True) for h in heading_tags for tag in soup.find_all(h)]
+
+    # Combine all with boost emphasis
+    combined_text = " ".join(
+        [title_text] * 3 +
+        all_headings * 2 +
+        [meta_description] * 2 +
+        [body_text]
+    )
+
+    cleaned_text = clean_text_for_keywords(combined_text)
     tokens = word_tokenize(cleaned_text)
-    filtered_tokens = [token for token in tokens if token.lower() not in STOP_WORDS_SET]
-    
-    if not filtered_tokens or len(filtered_tokens) < 10: # Need enough content
+    filtered_tokens = [t for t in tokens if t not in STOP_WORDS_SET]
+
+    if len(filtered_tokens) < 10:
         return {
             "top_keywords": [],
             "keyword_density": {},
-            "summary": "Insufficient text content for meaningful keyword analysis.",
-            "gist": "Not enough text content.",
-            "seo_suggestions": {"suggested_keywords": [], "guidelines": ["Add more relevant content to the page."]} ,
+            "summary": "Insufficient text for keyword extraction.",
+            "gist": "Not enough content.",
+            "seo_suggestions": {"suggested_keywords": [], "guidelines": ["Add more relevant content."]},
             "error": "Insufficient text content."
-            }
+        }
 
-    # --- Calculate Term Frequencies (TF) for words and phrases ---
-    word_freq = Counter(filtered_tokens)
-    bigram_freq = Counter(get_ngrams(filtered_tokens, 2))
-    trigram_freq = Counter(get_ngrams(filtered_tokens, 3))
+    # Frequency scoring
+    freq = Counter(filtered_tokens)
+    bigrams = Counter(get_ngrams(filtered_tokens, 2))
+    trigrams = Counter(get_ngrams(filtered_tokens, 3))
 
-    # Combine frequencies (simple approach: sum counts, could be weighted)
-    combined_freq = Counter()
-    combined_freq.update({word: count for word, count in word_freq.items()})
-    combined_freq.update({gram: count for gram, count in bigram_freq.items() if count > 1}) # Require bigrams to appear > once
-    combined_freq.update({gram: count for gram, count in trigram_freq.items() if count > 1}) # Require trigrams to appear > once
+    combined_freq = freq + Counter({ " ".join(k): v for k, v in bigrams.items() if v > 1 })
+    combined_freq.update({ " ".join(k): v for k, v in trigrams.items() if v > 1 })
 
-    # Get top N keywords/phrases by frequency
-    top_n = 15
-    top_keywords_freq = dict(combined_freq.most_common(top_n))
+    # Boost words found in title and all headings
+    boost_keywords = word_tokenize(clean_text_for_keywords(" ".join([title_text] + all_headings)))
+    for word in boost_keywords:
+        if word in combined_freq:
+            combined_freq[word] += 3  # boost for title + headings
 
-    # --- Calculate Keyword Density ---
-    total_words = len(tokens) # Use original token count before extensive filtering for density base
+    # Top 15 keywords
+    top_keywords = dict(combined_freq.most_common(15))
+
+    # Keyword Density
+    total_words = len(tokens)
     keyword_density = {}
-    if total_words > 0:
-        for keyword, count in top_keywords_freq.items():
-             # Count occurrences in the original cleaned text (case-insensitive) for density
-             occurrences = len(re.findall(r'\b' + re.escape(keyword) + r'\b', cleaned_text, re.IGNORECASE))
-             density = round((occurrences / total_words) * 100, 2) if total_words > 0 else 0
-             keyword_density[keyword] = f"{density}%"
+    for kw, count in top_keywords.items():
+        occurrences = len(re.findall(r'\b' + re.escape(kw) + r'\b', cleaned_text, re.IGNORECASE))
+        density = round((occurrences / total_words) * 100, 2)
+        keyword_density[kw] = f"{density}%"
 
+    # Summary generation
+    original_sentences = sent_tokenize(body_text)
+    keyword_list = list(top_keywords.keys())[:5]
+    sentence_scores = {}
 
-    # --- Attempt TF-IDF (Optional complement/alternative) ---
-    # TF-IDF needs multiple documents (sentences) to be meaningful here
-    top_keywords_tfidf = {}
-    try:
-        sentences = sent_tokenize(text_content) # Use original text for sentence context
-        if len(sentences) > 1: # Need more than one sentence for TF-IDF
-            vectorizer = TfidfVectorizer(
-                stop_words=list(STOP_WORDS_SET),
-                ngram_range=(1, 3), # Consider 1, 2, and 3-word phrases
-                max_features=top_n,
-                max_df=0.85, # Ignore terms that appear in > 85% of sentences
-                min_df=1 # Must appear at least once
-            )
-            tfidf_matrix = vectorizer.fit_transform(sentences)
-            feature_names = vectorizer.get_feature_names_out()
-            # Aggregate scores across sentences (e.g., max or sum)
-            scores = tfidf_matrix.max(axis=0).toarray().flatten() # Max TF-IDF score for each term across all sentences
-            top_keywords_tfidf = {feature_names[i]: round(scores[i], 3) for i in scores.argsort()[-top_n:][::-1] if scores[i] > 0}
-    except ValueError as e:
-        print(f"TF-IDF calculation warning: {e}") # Often happens with very short/uniform text
-        # Fallback to frequency already handled
-
-    # Decide which keywords to prioritize (e.g., TF-IDF if available, else frequency)
-    final_top_keywords = top_keywords_tfidf if top_keywords_tfidf else top_keywords_freq
-     # Format for output
-    formatted_keywords = [{"keyword": kw, "score": score} for kw, score in final_top_keywords.items()]
-
-
-    # --- Generate Summary (Extractive based on keywords) ---
-    sentences = sent_tokenize(text_content)
-    sentence_scores = Counter()
-    keywords_for_summary = list(final_top_keywords.keys())[:5] # Use top 5 for summary scoring
-
-    for sentence in sentences:
-        score = 0
-        for keyword in keywords_for_summary:
-            if keyword in sentence.lower():
-                 # Simple scoring: +1 per keyword match per sentence
-                 score += sentence.lower().count(keyword)
-                 # Optional: Weight longer keywords more, or TF-IDF scores
+    for sent in original_sentences:
+        score = sum([sent.lower().count(kw.lower()) for kw in keyword_list])
         if score > 0:
-             sentence_scores[sentence] = score
+            sentence_scores[sent] = score
 
-    # Select top ~3 sentences for summary
-    num_summary_sentences = min(3, len(sentence_scores))
-    summary_sentences = [sent for sent, score in sentence_scores.most_common(num_summary_sentences)]
-    summary = " ".join(summary_sentences) if summary_sentences else "Could not generate summary."
+    summary = " ".join([s for s, _ in sorted(sentence_scores.items(), key=lambda x: x[1], reverse=True)[:3]])
 
-    # --- Dynamic SEO Suggestions ---
-    seo_suggestions_list = []
-    top_5_keys = list(final_top_keywords.keys())[:5]
-    if top_5_keys:
-        # Suggest long-tail variations (simple patterns)
-        seo_suggestions_list.extend([f"Best {kw} strategies", f"How to use {kw} effectively", f"{kw} benefits"] for kw in top_5_keys[:3])        # Suggest content ideas
-        seo_suggestions_list.append(f"Consider writing about '{top_5_keys[0]} vs {top_5_keys[1]}'") # Example comparison post
-        seo_suggestions_list.append(f"Create an 'Ultimate Guide to {top_5_keys[0]}'") # Example guide post
-    else:
-        seo_suggestions_list.append("Identify primary and secondary keywords for this page's topic.")
-
+    # Suggestions
+    suggestions = [f"Write about: {kw} tips, benefits, strategies" for kw in keyword_list]
     guidelines = [
-        "Integrate top keywords naturally into the Title, H1, meta description, body text, and image alt text.",
-        "Aim for a natural keyword density (typically 1-2% for primary keywords, avoid stuffing).",
-        "Use a mix of short-tail and long-tail keywords.",
-        "Focus on user intent and providing valuable content around these topics.",
-        "Internal linking: Link relevant keywords to other related pages on your site."
+        "Include top keywords in title and headings (H1–H6).",
+        "Use semantic variations, avoid keyword stuffing.",
+        "Structure content clearly using subheadings.",
+        "Link between related pages with keyword-rich anchor text.",
     ]
 
     return {
-        "top_keywords": formatted_keywords, # List of {"keyword": kw, "score": score}
-        "keyword_density": keyword_density, # Dict of {keyword: "density%"}
+        "top_keywords": [{"keyword": k, "score": v} for k, v in top_keywords.items()][:5],
+        "keyword_density": keyword_density,
         "summary": summary,
-        "gist": f"The page appears to focus on: {', '.join(top_5_keys)}." if top_5_keys else "Could not determine main topics.",
-        "seo_suggestions": {
-            "suggested_keywords_ideas": seo_suggestions_list,
-            "guidelines": guidelines
-        },
-        "error": None # Clear previous error if successful
+        "gist": f"The page focuses on: {', '.join(keyword_list)}",
+        "seo_suggestions": {"suggested_keywords_ideas": suggestions, "guidelines": guidelines},
+        "error": None
     }
+
 
 
 # 9. Anchor Tag Analysis
@@ -836,6 +824,8 @@ def analyze_anchor_tags(page_content):
     """
     Analyzes anchor text for generic phrases and counts internal/external links.
     """
+    print("Anchor Tag Analysis Running")
+
     soup = BeautifulSoup(page_content, 'html.parser')
     anchor_tags = soup.find_all('a', href=True)
     total_anchors = 0
@@ -906,6 +896,8 @@ def analyze_url_structure(url):
     """
     Analyzes the structure of the given URL path.
     """
+    print("URL Structure Analysis Running")
+
     parsed_url = urlparse(url)
     path = parsed_url.path
     issues = []
@@ -958,6 +950,8 @@ def validate_robots_txt(url):
     """
     Checks for the presence and accessibility of robots.txt.
     """
+    print("Robo txt Analysis Running")
+
     parsed_url = urlparse(url)
     base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
     robots_url = urljoin(base_url, "/robots.txt")
@@ -1015,6 +1009,8 @@ def validate_sitemap(url):
     """
     Checks for common XML sitemap locations (sitemap.xml).
     """
+    print("Sitemap Analysis Running")
+
     parsed_url = urlparse(url)
     base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
     # Common sitemap locations
@@ -1075,9 +1071,10 @@ def validate_sitemap(url):
 # 13. Blog Optimization (Reworked without scraping)
 
 # ---- Google Search Integration ----
-
 def fetch_google_title_suggestions(keyword, serpapi_key):
     """Fetches real-world title ideas using SerpApi Google Search."""
+    print("GOogle Titles Analysis Running")
+
     try:
         params = {
             "engine": "google",
@@ -1089,40 +1086,81 @@ def fetch_google_title_suggestions(keyword, serpapi_key):
         resp.raise_for_status()
         results = resp.json()
 
-        # Extract titles from organic results
         items = results.get('organic_results', [])
         titles = [item.get('title') for item in items if 'title' in item]
-        print("SERP TITLES", titles)
-        return titles[:5]  # Limit to top 5 titles
+
+        return titles[:5]
     except Exception as e:
         print(f"SerpApi error: {e}")
         return []
 
 
+def generate_title_suggestions(current_title, h1_texts, keywords, google_titles=None):
+    """Generates title suggestions based on content, keywords, and optional API results."""
+    print("Genrating Title Suggestions Running")
 
-def analyze_blog_optimization(page_content, url, api_key=None, cx=None):
+    suggestions = []
+    top_keywords = [kw['keyword'] for kw in keywords[:3]]
+    print("1")
+
+    # Suggestion 1: Enhance current title
+    if current_title and top_keywords:
+        suggestions.append(f"{current_title} | Key Insights on {top_keywords[0]}")
+    print("2")
+
+    # Suggestion 2: Use H1 + Keyword
+    if h1_texts and top_keywords:
+        suggestions.append(f"{h1_texts[0]}: A Guide to {top_keywords[0]}")
+    print("3")
+
+    # Suggestion 3: Common SEO Patterns
+    if len(top_keywords) > 1:
+        suggestions.append(f"Understanding {top_keywords[0]} and {top_keywords[1]}")
+        suggestions.append(f"What is {top_keywords[0]}? Explained Simply")
+        suggestions.append(f"{top_keywords[0].capitalize()} in 2024: Trends & Strategies")
+        suggestions.append(f"{top_keywords[0]} vs {top_keywords[1]}: Which One Matters More?")
+        suggestions.append(f"Everything You Need to Know About {top_keywords[0]}")
+    print("4")
+
+    # Add cleaned SerpAPI titles
+    if google_titles:
+        cleaned_google_titles = [
+            title for title in google_titles
+            if title and len(title) > 20 and (not current_title or title.lower() != current_title.lower())
+        ]
+        suggestions.extend(cleaned_google_titles)
+    print("5")
+
+    # Remove duplicates and filter by length
+    unique_suggestions = list(dict.fromkeys(suggestions))
+    filtered = [s for s in unique_suggestions if len(s) < 70]
+    print("6")
+
+    return filtered[:5]
+
+
+def analyze_blog_optimization(page_content, url=None, api_key=None):
     """
     Analyzes blog content and suggests improvements using keywords and optionally Google API.
     """
+    print("Blog Optimization Running")
+
     soup = BeautifulSoup(page_content, 'html.parser')
     title_tag = soup.find('title')
     current_title = title_tag.get_text(strip=True) if title_tag else None
     h1_tags = soup.find_all('h1')
     h1_texts = [h1.get_text(strip=True) for h1 in h1_tags if h1.get_text(strip=True)]
 
-    # Use local keyword analysis
     keyword_info = analyze_keyword_summary(page_content)
     top_keywords = keyword_info.get("top_keywords", [])
 
-    # Fetch external suggestions if API key provided
     google_titles = []
     if top_keywords and api_key:
-        google_titles = fetch_google_title_suggestions(top_keywords[0]['keyword'], serpapi_key)
-        print("GOOGLE TITLE", google_titles)
+        print("RUNNING")
+        google_titles = fetch_google_title_suggestions(top_keywords[0]['keyword'], api_key)
 
-    # Generate suggestions
     suggested_titles = generate_title_suggestions(current_title, h1_texts, top_keywords, google_titles)
-    print(suggested_titles)
+
     suggestions = []
     if not current_title:
         suggestions.append("Page is missing a <title> tag. Add a compelling title reflecting the content.")
@@ -1130,10 +1168,8 @@ def analyze_blog_optimization(page_content, url, api_key=None, cx=None):
         suggestions.append("Page is missing an H1 tag. Add a primary H1 heading that matches the main topic.")
     elif len(h1_texts) > 1:
         suggestions.append("Multiple H1 tags found. Use only one H1 for the main title of the blog post.")
-
     if current_title and h1_texts and current_title.lower() != h1_texts[0].lower():
         suggestions.append("The Title tag and H1 tag differ. Ensure both accurately represent the content and include primary keywords.")
-
     if suggested_titles:
         suggestions.append("Consider the suggested titles, which incorporate real-world search patterns and content-relevant keywords.")
     else:
@@ -1144,44 +1180,18 @@ def analyze_blog_optimization(page_content, url, api_key=None, cx=None):
     return {
         "current_title": current_title,
         "h1_tags": h1_texts,
+        "top_keywords": top_keywords,
+        "google_titles": google_titles,
         "suggested_titles": suggested_titles,
-        "suggestions": suggestions
+        "seo_suggestions": suggestions
     }
-
-def generate_title_suggestions(current_title, h1_texts, keywords, google_titles=None):
-    """Generates title suggestions based on content, keywords, and optional API results."""
-    suggestions = []
-    top_keywords = [kw['keyword'] for kw in keywords[:3]]  # Use top 3 keywords
-
-    # Suggestion 1: Enhance current title
-    if current_title and top_keywords:
-        suggestions.append(f"{current_title} | Key Insights on {top_keywords[0]}")
-
-    # Suggestion 2: Use H1 + Keyword
-    if h1_texts and top_keywords:
-        suggestions.append(f"{h1_texts[0]}: A Guide to {top_keywords[0]}")
-
-    # Suggestion 3: Common Patterns
-    if top_keywords:
-        # suggestions.append(f"Ultimate Guide to {top_keywords[0]}")
-        # suggestions.append(f"5 Tips for Effective {top_keywords[0]}")
-        if len(top_keywords) > 1:
-            suggestions.append(f"Understanding {top_keywords[0]} and {top_keywords[1]}")
-
-    # Add Google API titles if available
-    if google_titles:
-        suggestions.extend(google_titles)
-
-    # Ensure uniqueness and reasonable length
-    unique_suggestions = list(dict.fromkeys(suggestions))
-    filtered = [s for s in unique_suggestions if len(s) < 70]
-    
-    return filtered[:5]
 # 14. HTML Structure Analysis (New)
 def analyze_html_structure(page_content):
     """
     Analyzes the use of semantic HTML5 elements and heading structure logic.
     """
+    print("Analyze HTML Structure Running")
+
     soup = BeautifulSoup(page_content, 'html.parser')
     issues = []
     suggestions = []
@@ -1255,6 +1265,8 @@ def analyze_da_pa_spam(url):
     """
     Placeholder function explaining that DA/PA/Spam Score require external tools/APIs.
     """
+    print("DA PA Score Analysis Running")
+
     explanation = (
         "Domain Authority (DA), Page Authority (PA), and Spam Score are metrics developed by Moz "
         "(or similar metrics by other providers like SEMrush). Accurate calculation requires access "
