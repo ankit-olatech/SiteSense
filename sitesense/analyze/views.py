@@ -1139,7 +1139,7 @@ def generate_title_suggestions(current_title, h1_texts, keywords, google_titles=
     return filtered[:5]
 
 
-def analyze_blog_optimization(page_content, url=None, api_key=None):
+def analyze_blog_optimization(page_content, url=None, api_key=serpapi_key):
     """
     Analyzes blog content and suggests improvements using keywords and optionally Google API.
     """
