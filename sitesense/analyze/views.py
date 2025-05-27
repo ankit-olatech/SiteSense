@@ -146,7 +146,7 @@ def analyze_on_page_optimization(content):
     Analyzes heading structure (H1-H6). Keyword density is now handled in analyze_keyword_summary.
     """
     print("On Page Optimization Running")
-    soup = BeautifulSoup(content, 'html.parser')
+    soup = BeautifulSoup(content, 'lxml')
     headings = soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
     heading_hierarchy = {'h1': [], 'h2': [], 'h3': [], 'h4': [], 'h5': [], 'h6': []}
     issues = []
@@ -1117,7 +1117,7 @@ def generate_title_suggestions(current_title, h1_texts, keywords, google_titles=
     if len(top_keywords) > 1:
         suggestions.append(f"Understanding {top_keywords[0]} and {top_keywords[1]}")
         suggestions.append(f"What is {top_keywords[0]}? Explained Simply")
-        suggestions.append(f"{top_keywords[0].capitalize()} in 2024: Trends & Strategies")
+        suggestions.append(f"{top_keywords[0].capitalize()} in 2025: Trends & Strategies")
         suggestions.append(f"{top_keywords[0]} vs {top_keywords[1]}: Which One Matters More?")
         suggestions.append(f"Everything You Need to Know About {top_keywords[0]}")
     print("4")
@@ -1145,7 +1145,7 @@ def analyze_blog_optimization(page_content, url=None, api_key=None):
     """
     print("Blog Optimization Running")
 
-    soup = BeautifulSoup(page_content, 'html.parser')
+    soup = BeautifulSoup(page_content, 'lxml')
     title_tag = soup.find('title')
     current_title = title_tag.get_text(strip=True) if title_tag else None
     h1_tags = soup.find_all('h1')
@@ -1153,11 +1153,13 @@ def analyze_blog_optimization(page_content, url=None, api_key=None):
 
     keyword_info = analyze_keyword_summary(page_content)
     top_keywords = keyword_info.get("top_keywords", [])
-
+    print("TOP KEY TEST", top_keywords)
     google_titles = []
-    if top_keywords and api_key:
+    if top_keywords:
         print("RUNNING")
         google_titles = fetch_google_title_suggestions(top_keywords[0]['keyword'], api_key)
+    else:
+        print("LOGIC FUCKED!")
 
     suggested_titles = generate_title_suggestions(current_title, h1_texts, top_keywords, google_titles)
 
