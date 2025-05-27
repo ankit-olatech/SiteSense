@@ -19,7 +19,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import asyncio
 from transformers import T5ForConditionalGeneration, T5Tokenizer # For AI detection
-
+from django.conf import settings
 # --- NLTK Data Downloads (Ensure these run successfully) ---
 # It's better to run these once during setup/deployment
 try:
@@ -35,8 +35,8 @@ except nltk.downloader.DownloadError:
 
 # --- Constants ---
 # Use environment variables for API keys in production!
-serpapi_key = "4f40c394632e672b6192e71ff553f0ae675da0e8140f3d5e5a899b94e218fd28"
-PAGESPEED_API_KEY = os.environ.get('PAGESPEED_API_KEY', 'AIzaSyCzMj9hqnN8lSmMIc2vMQZ2mC9N-AcNvcQ') # Example fallback
+PAGESPEED_API_KEY = settings.PAGESPEED_API_KEY
+serpapi_key = settings.SERPAPI_KEY
 PAGESPEED_TIMEOUT = 500
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"

@@ -14,7 +14,6 @@ from pathlib import Path
 import os
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
-api_key =  "AIzaSyCzMj9hqnN8lSmMIc2vMQZ2mC9N-AcNvcQ" 
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
@@ -27,7 +26,8 @@ DEBUG = True
 
 ALLOWED_HOSTS = []
 
-
+PAGESPEED_API_KEY = "AIzaSyCzMj9hqnN8lSmMIc2vMQZ2mC9N-AcNvcQ"
+SERPAPI_KEY = "4f40c394632e672b6192e71ff553f0ae675da0e8140f3d5e5a899b94e218fd28"
 # Application definition
 
 INSTALLED_APPS = [
