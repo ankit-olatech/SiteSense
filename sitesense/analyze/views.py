@@ -16,7 +16,7 @@ from nltk.tokenize import sent_tokenize, word_tokenize
 from nltk import ngrams # For keyword phrase extraction
 from collections import Counter
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, ProcessPoolExecutor
 import asyncio
 from transformers import T5ForConditionalGeneration, T5Tokenizer # For AI detection
 from django.conf import settings
@@ -47,95 +47,76 @@ REQUEST_TIMEOUT = 500 # Timeout for external requests in seconds
 def index(request):
     return render(request, 'index.html')
 
+# Timed function wrapper
+def timed(func):
+    def wrapper(*args, **kwargs):
+        start = time.time()
+        print(f"{func.__name__} Running")
+        result = func(*args, **kwargs)
+        print(f"{func.__name__} took {time.time() - start:.2f} seconds")
+        return result
+    return wrapper
+
+# Async wrapper with timeout
+async def run_async(func, args=(), timeout=30):
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(func, *args), timeout=timeout)
+    except asyncio.TimeoutError:
+        return {"error": f"{func.__name__} timed out after {timeout}s"}
+    except Exception as e:
+        return {"error": str(e)}
+
+# Main View Function
 async def analyze_page(request):
-    start_time = time.time() # Record the start time
+    start_time = time.time()
+    
+    if request.method != 'GET':
+        return JsonResponse({"error": "Invalid request method. Use GET."})
 
-    if request.method == 'GET':
-        url = request.GET.get('url')
-        if not url or not url.startswith(('http://', 'https://')):
-            return JsonResponse({"error": "A valid URL starting with http:// or https:// is required."})
+    url = request.GET.get('url')
+    if not url or not url.startswith(('http://', 'https://')):
+        return JsonResponse({"error": "A valid URL starting with http:// or https:// is required."})
 
-        # Validate URL format roughly
-        try:
-            parsed_url = urlparse(url)
-            if not parsed_url.scheme or not parsed_url.netloc:
-                raise ValueError("Invalid URL structure")
-        except ValueError as e:
-            return JsonResponse({"error": f"Invalid URL format: {str(e)}"})
+    try:
+        parsed_url = urlparse(url)
+        if not parsed_url.scheme or not parsed_url.netloc:
+            raise ValueError("Invalid URL structure")
+    except ValueError as e:
+        return JsonResponse({"error": f"Invalid URL format: {str(e)}"})
 
+    try:
+        response = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+        page_content = response.text
+        if 'html' not in response.headers.get('Content-Type', '').lower():
+            return JsonResponse({"error": "URL does not point to an HTML page."})
+    except Exception as e:
+        return JsonResponse({"error": f"Failed to fetch the page: {str(e)}"})
 
-        # Fetch the page content
-        try:
-            response = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
-            response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
-            page_content = response.text
-            content_type = response.headers.get('Content-Type', '').lower()
-            if 'html' not in content_type:
-                 return JsonResponse({"error": f"URL does not point to an HTML page (Content-Type: {content_type})."})
+    # Define all timed functions
+    tasks = [
+        ("on_page_optimization", run_async(timed(analyze_on_page_optimization), [page_content])),
+        ("h1_tag", run_async(timed(analyze_h1_tag), [page_content])),
+        ("schema_validation", run_async(timed(validate_schema), [page_content])),
+        ("ai_content_detection", run_async(timed(detect_ai_content), [page_content])),
+        ("page_speed", run_async(timed(analyze_page_speed), [url], timeout=60)),
+        ("meta_tags", run_async(timed(check_meta_tags), [page_content])),
+        ("keyword_summary", run_async(timed(analyze_keyword_summary), [page_content])),
+        ("anchor_tags", run_async(timed(analyze_anchor_tags), [page_content])),
+        ("url_structure", run_async(timed(analyze_url_structure), [url])),
+        ("robots_txt", run_async(timed(validate_robots_txt), [url])),
+        ("xml_sitemap", run_async(timed(validate_sitemap), [url])),
+        ("blog_optimization", run_async(timed(analyze_blog_optimization), [page_content, url])),
+        ("detect_broken_urls", run_async(timed(detect_broken_urls), [url])),
+        ("html_structure", run_async(timed(analyze_html_structure), [page_content])),
+        ("da_pa_spam_score", run_async(timed(analyze_da_pa_spam), [url])),
+    ]
 
-        except requests.exceptions.Timeout:
-             return JsonResponse({"error": f"Failed to fetch the page: Request timed out after {REQUEST_TIMEOUT} seconds."})
-        except requests.exceptions.RequestException as e:
-             return JsonResponse({"error": f"Failed to fetch the page: {str(e)}"})
-        except Exception as e:
-             return JsonResponse({"error": f"An unexpected error occurred while fetching the page: {str(e)}"})
+    results = await asyncio.gather(*(t[1] for t in tasks))
+    response_data = {name: result for (name, _), result in zip(tasks, results)}
 
-        analysis_results = {}
-
-        try:
-            # Define all analysis functions with their respective arguments
-            functions_with_args = [
-                (analyze_on_page_optimization, [page_content]),
-                (analyze_h1_tag, [page_content]),
-                (validate_schema, [page_content]),
-                (detect_ai_content, [page_content]),
-                (analyze_page_speed, [url]),
-                (check_meta_tags, [page_content]),
-                (analyze_keyword_summary, [page_content]),
-                (analyze_anchor_tags, [page_content]),
-                (analyze_url_structure, [url]),
-                (validate_robots_txt, [url]),
-                (validate_sitemap, [url]),
-                (analyze_blog_optimization, [page_content, url]),
-                (detect_broken_urls, [url]),
-                (analyze_html_structure, [page_content]),
-                (analyze_da_pa_spam, [url]),
-            ]
-
-            # Execute each analysis function in a thread pool
-            loop = asyncio.get_running_loop()
-            with ThreadPoolExecutor() as pool:
-                tasks = [
-                    loop.run_in_executor(pool, func, *args)
-                    for func, args in functions_with_args
-                ]
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-
-            keys = [
-                'on_page_optimization', 'h1_tag', 'schema_validation',
-                'ai_content_detection', 'page_speed', 'meta_tags',
-                'keyword_summary', 'anchor_tags', 'url_structure',
-                'robots_txt', 'xml_sitemap', 'blog_optimization',
-                'detect_broken_urls', 'html_structure', 'da_pa_spam_score'
-            ]
-
-            analysis_results = {}
-            for key, result in zip(keys, results):
-                if isinstance(result, Exception):
-                    print(f"Error in analysis '{key}': {result}")
-                    analysis_results[key] = {"error": str(result)}
-                else:
-                    analysis_results[key] = result
-
-        except Exception as e:
-            return JsonResponse({"error": f"Unexpected error during analysis: {str(e)}"})
-
-        end_time = time.time()
-        print(f"Analysis for {url} completed in {end_time - start_time:.2f} seconds")
-
-        return JsonResponse(analysis_results)
-
-    return JsonResponse({"error": "Invalid request method. Use GET."})
+    print(f"🔎 Total analysis time: {time.time() - start_time:.2f} seconds")
+    return JsonResponse(response_data)
 
 
 # --- Analysis Functions ---
@@ -807,7 +788,7 @@ def analyze_keyword_summary(page_content):
         "Structure content clearly using subheadings.",
         "Link between related pages with keyword-rich anchor text.",
     ]
-
+    print("KEYWROD ANALYSIS FINISHED!")
     return {
         "top_keywords": [{"keyword": k, "score": v} for k, v in top_keywords.items()][:5],
         "keyword_density": keyword_density,
