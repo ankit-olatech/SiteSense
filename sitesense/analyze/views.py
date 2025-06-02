@@ -302,133 +302,103 @@ def preprocess_content(content):
 
     return text
 
-# Cache for the T5 model and tokenizer to avoid reloading on every request
-t5_model = None
-t5_tokenizer = None
+# Global cache
+t5_model, t5_tokenizer = None, None
 
+# ------------------- Preprocessing -------------------
+def preprocess_content(content):
+    soup = BeautifulSoup(content, 'html.parser')
+    for tag in soup(["script", "style"]):
+        tag.decompose()
+    text = soup.get_text(separator='\n', strip=True)
+    text = re.sub(r'\n\s*\n', '\n', text)
+    text = re.sub(r'[ \t]+', ' ', text)
+    return text.strip()
+
+# ------------------- Load T5 Model -------------------
 def load_t5_model():
-    """Loads the T5 model and tokenizer if not already loaded."""
     global t5_model, t5_tokenizer
     if t5_model is None or t5_tokenizer is None:
         try:
-            print("Loading T5 model and tokenizer (this may take a moment)...")
-            # Consider using 'google/flan-t5-small' or other variants if 't5-small' has issues
+            print("Loading T5 model...")
             model_name = "t5-small"
             t5_model = T5ForConditionalGeneration.from_pretrained(model_name)
             t5_tokenizer = T5Tokenizer.from_pretrained(model_name)
-            print("T5 model loaded.")
         except Exception as e:
             print(f"Error loading T5 model: {e}")
-            # Set to False to prevent retries within the same run if loading fails
-            t5_model = False
-            t5_tokenizer = False
+            t5_model, t5_tokenizer = False, False
     return t5_model, t5_tokenizer
 
+# ------------------- AI Detection -------------------
+def detect_ai_content(content, fast_mode=False):
+    clean_text = preprocess_content(content)
+    performance_note = "T5 paraphrasing disabled for speed." if fast_mode else "Includes paraphrasing (slower)."
 
-def detect_ai_content(content):
-    """
-    Detects potential AI-like patterns and suggests rewrites using T5.
-    NOTE: T5 inference can be slow and resource-intensive.
-    """
-    print("AI Detection Running")
-
-    performance_note = "AI detection using T5 model can be slow."
-    clean_content = preprocess_content(content)
-
-    if len(clean_content.strip()) < 50: # Need sufficient text
+    if len(clean_text) < 50:
         return {
             "performance_note": performance_note,
             "ai_detected_heuristic": False,
             "readability_score": None,
-            "paraphrase_suggestion": "Content too short for reliable AI analysis or paraphrasing.",
+            "paraphrase_suggestion": "Content too short for reliable analysis.",
             "error": None
         }
 
-    ai_detected_heuristic = False
-    readability_score = None
-    human_suggestion = "Could not generate paraphrase suggestion."
+    # --- Heuristics ---
+    generic_phrases = [
+        "in conclusion", "as an AI language model", "unlock the power",
+        "delve into the world", "in the digital age"
+    ]
+    ai_detected_heuristic = any(phrase in clean_text.lower() for phrase in generic_phrases)
+
+    # --- Readability Score ---
+    try:
+        readability_score = flesch_reading_ease(clean_text)
+    except Exception as e:
+        return {
+            "performance_note": performance_note,
+            "ai_detected_heuristic": ai_detected_heuristic,
+            "readability_score": None,
+            "paraphrase_suggestion": "Error calculating readability score.",
+            "error": str(e)
+        }
+
+    # --- Paraphrasing (optional) ---
+    human_suggestion = "Paraphrasing skipped for speed." if fast_mode else "No suggestion generated."
     error_message = None
 
-    # --- Heuristics (Basic Checks) ---
-    # Generic phrases often found in basic AI output (expand this list)
-    generic_phrases = [
-        "in conclusion", "it is important to note", "as an AI language model",
-        "unlock the power", "delve into the world", "in the digital age"
-    ]
-    for phrase in generic_phrases:
-        if phrase in clean_content.lower():
-            ai_detected_heuristic = True
-            break
-
-    # Check readability score (very high/low scores *might* indicate non-human patterns)
-    try:
-        readability_score = flesch_reading_ease(clean_content)
-        # Adjust thresholds based on expected content type
-        if readability_score < 30 or readability_score > 85:
-             # This is a weak indicator, use with caution
-             # ai_detected_heuristic = True
-             pass
-    except Exception as e:
-        error_message = f"Error calculating readability score: {e}"
-
-    # --- Paraphrasing with T5 (Slow Part) ---
-    try:
-        model, tokenizer = load_t5_model()
-
-        if model and tokenizer: # Check if loading was successful
-            # Paraphrase a segment rather than the whole text for speed/relevance
-            # Taking the first ~200 words as an example segment
-            segment_to_paraphrase = " ".join(clean_content.split()[:200])
-
-            input_text = f"paraphrase: {segment_to_paraphrase}"
-            # Ensure tokenizer handles potential long inputs correctly
-            input_ids = tokenizer.encode(input_text, return_tensors="pt", max_length=512, truncation=True)
-
-            # Generate paraphrased text
-            outputs = model.generate(
-                input_ids,
-                max_length=512, # Max length of generated output
-                num_return_sequences=1,
-                num_beams=4,      # Beam search for potentially better quality
-                early_stopping=True # Stop when end token is generated
-                # temperature=0.7 # Adjust creativity vs coherence if needed
-            )
-            human_suggestion = tokenizer.decode(outputs[0], skip_special_tokens=True)
-        elif model is False: # Loading failed previously
-             error_message = "T5 model failed to load, cannot generate paraphrase."
-             human_suggestion = "Paraphrasing unavailable due to model loading error."
-        else:
-             # Should not happen if load_t5_model logic is correct
-             error_message = "T5 model/tokenizer not available."
-             human_suggestion = "Paraphrasing unavailable."
-
-    except Exception as e:
-        error_message = f"Error during T5 paraphrase generation: {str(e)}"
-        human_suggestion = f"Could not generate paraphrase suggestion due to error: {str(e)}"
-
+    if not fast_mode:
+        try:
+            model, tokenizer = load_t5_model()
+            if model and tokenizer:
+                segment = " ".join(clean_text.split()[:100])  # faster input
+                input_ids = tokenizer.encode(f"paraphrase: {segment}", return_tensors="pt", truncation=True, max_length=256)
+                outputs = model.generate(input_ids, max_length=256, num_return_sequences=1, early_stopping=True)
+                human_suggestion = tokenizer.decode(outputs[0], skip_special_tokens=True)
+            else:
+                human_suggestion = "Paraphrasing unavailable."
+                error_message = "T5 model not loaded."
+        except Exception as e:
+            human_suggestion = "Paraphrasing error."
+            error_message = str(e)
 
     # --- Suggestions ---
     suggestions = []
     if ai_detected_heuristic:
-        suggestions.append("Content shows some patterns (e.g., generic phrases, unusual readability score) that *might* indicate AI generation or unnatural writing. Review for authenticity and clarity.")
+        suggestions.append("Generic phrases detected. May indicate AI-written or templated content.")
     else:
-         suggestions.append("Heuristic checks did not find strong indicators of AI generation. However, manual review is always recommended.")
+        suggestions.append("No strong AI-writing signals found in heuristics.")
 
-    if readability_score is not None:
-         suggestions.append(f"Flesch Reading Ease score: {readability_score:.2f}. Aim for a score appropriate for your target audience (e.g., 60-70 for general public).")
-
-    suggestions.append("Consider the generated paraphrase suggestion for alternative phrasing, but always review and edit suggestions to ensure accuracy, tone, and originality.")
-
+    suggestions.append(f"Flesch Reading Ease: {readability_score:.2f} (Ideal: 60–70 for general audiences)")
+    suggestions.append("Review paraphrased version (if generated) for more human-like tone.")
 
     return {
         "performance_note": performance_note,
         "ai_detected_heuristic": ai_detected_heuristic,
-        "readability_score": f"{readability_score:.2f}" if readability_score is not None else "N/A",
+        "readability_score": f"{readability_score:.2f}",
         "paraphrase_suggestion": human_suggestion,
         "suggestions": suggestions,
         "error": error_message
     }
-
 
 # 5. Page Speed Analysis
 def analyze_page_speed(url):
