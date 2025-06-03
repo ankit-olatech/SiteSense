@@ -408,7 +408,7 @@ def analyze_page_speed(url):
     """
     import time
     from requests.adapters import HTTPAdapter
-    from requests.packages.urllib3.util.retry import Retry
+    from urllib3.util.retry import Retry
 
     print("Page Speed Running")
 
