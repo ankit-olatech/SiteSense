@@ -404,21 +404,34 @@ def detect_ai_content(content, model_size="small"):
 # 5. Page Speed Analysis
 def analyze_page_speed(url):
     """
-    Analyzes page speed using Google PageSpeed Insights API.
+    Efficiently analyzes desktop page speed using Google PageSpeed Insights API.
     """
+    import time
+    from requests.adapters import HTTPAdapter
+    from requests.packages.urllib3.util.retry import Retry
+
     print("Page Speed Running")
 
-    # Ensure API key is available
     if not PAGESPEED_API_KEY or PAGESPEED_API_KEY == 'YOUR_SECURE_API_KEY':
         return {"error": "PageSpeed API key is missing or not configured."}
 
-    api_url = f'https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url={url}&key={PAGESPEED_API_KEY}&category=PERFORMANCE' # Focus on performance
+    api_url = f'https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url={url}&key={PAGESPEED_API_KEY}&category=PERFORMANCE&strategy=desktop'
 
     try:
-        print("Requesting Pagespeed analysis for {url} with timeout {PAGESPEED_TIMEOUT}s...")
-        response = requests.get(api_url, timeout=PAGESPEED_TIMEOUT) # Allow longer timeout for API
+        print(f"Requesting Pagespeed analysis for {url} with timeout {PAGESPEED_TIMEOUT}s...")
+
+        session = requests.Session()
+        retries = Retry(total=2, backoff_factor=1.5, status_forcelist=[429, 500, 502, 503, 504])
+        session.mount('https://', HTTPAdapter(max_retries=retries))
+
+        start_time = time.time()
+        response = session.get(api_url, timeout=PAGESPEED_TIMEOUT)
+        print(f"Response received in {time.time() - start_time:.2f} seconds")
+
         response.raise_for_status()
         data = response.json()
+
+        # (keep the rest of your existing logic here...)
 
         lighthouse_result = data.get('lighthouseResult', {})
         categories = lighthouse_result.get('categories', {})
