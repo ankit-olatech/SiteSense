@@ -20,6 +20,15 @@ import asyncio
 from transformers import T5ForConditionalGeneration, T5Tokenizer # For AI detection
 from django.conf import settings
 import random
+
+# --- Selenium Imports ---
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service as ChromeService
+from webdriver_manager.chrome import ChromeDriverManager # Automates driver management
+from selenium.webdriver.chrome.options import Options
+from selenium.common.exceptions import TimeoutException, WebDriverException
+# --- End Selenium Imports ---
+
 # --- NLTK Data Downloads (Ensure these run successfully) ---
 # It's better to run these once during setup/deployment
 try:
@@ -105,38 +114,66 @@ async def analyze_page(request):
             raise ValueError("Invalid URL structure")
     except ValueError as e:
         return JsonResponse({"error": f"Invalid URL format: {str(e)}"})
+    
+    page_content = None
+    driver = None  # Initialize driver to None
 
     try:
-        # Create session with rotating user agent
-        session = requests.Session()
-        print("ok1")
+        # --- Selenium WebDriver Setup ---
+        print("Initializing Selenium WebDriver...")
+        chrome_options = Options()
         headers = HEADERS.copy()
-        print("ok2")
-
-        headers["User-Agent"] = random.choice(USER_AGENTS)  # Random UA
-        print("ok3")
-
+        headers["User-Agent"] = random.choice(USER_AGENTS) # [cite: 4]
         
+        # Add common options for headless Browse and to mimic a real user
+        chrome_options.add_argument("--headless")  # Run in headless mode
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument(f"user-agent={headers['User-Agent']}")
+        chrome_options.add_argument("--window-size=1920,1080")
+        chrome_options.add_argument("--disable-blink-features=AutomationControlled") # Helps avoid bot detection
+        chrome_options.add_experimental_option('excludeSwitches', ['enable-logging', 'enable-automation'])
+        chrome_options.add_experimental_option('useAutomationExtension', False)
+        
+        # Using WebDriverManager to automatically download and manage ChromeDriver
+        try:
+            driver = webdriver.Chrome(service=ChromeService(ChromeDriverManager().install()), options=chrome_options)
+        except Exception as e:
+             # Fallback or specific path if WebDriverManager fails or is not preferred
+             print(f"WebDriverManager failed: {e}. Ensure ChromeDriver is in your PATH or specify its path.")
+             # Example: driver = webdriver.Chrome(executable_path='/path/to/chromedriver', options=chrome_options)
+             return JsonResponse({"error": f"Failed to initialize WebDriver: {str(e)}"})
+
+
+        print(f"Fetching URL with Selenium: {url}")
         # Add delay before request
-        time.sleep(random.uniform(0.5, 2.0))
-        print("ok4")
+        time.sleep(random.uniform(0.5, 2.0)) # [cite: 10]
+        driver.set_page_load_timeout(REQUEST_TIMEOUT) # Timeout for page load
+        driver.get(url)
 
-        
-        response = session.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
-        print("ok5")
-
-        # response.raise_for_status()
-        print("ok6")
-
-        page_content = response.text
-        print("ok7")
-
-        if 'html' not in response.headers.get('Content-Type', '').lower():
-            print("ok8")
-
-            return JsonResponse({"error": "URL does not point to an HTML page."})
+        page_content = driver.page_source
+        # print("Page content fetched successfully with Selenium.", page_content)
+    except TimeoutException:
+        if driver:
+            driver.quit()
+        return JsonResponse({"error": f"Failed to fetch the page with Selenium: Page load timed out after {REQUEST_TIMEOUT} seconds."})
+    except WebDriverException as e:
+        if driver:
+            driver.quit()
+        return JsonResponse({"error": f"Failed to fetch the page with Selenium WebDriver: {str(e)}"})
     except Exception as e:
-        return JsonResponse({"error": f"Failed to fetch the page: {str(e)}"})
+        if driver:
+            driver.quit()
+        return JsonResponse({"error": f"Failed to fetch the page with Selenium: {str(e)}"})
+    finally:
+        if driver:
+            print("Quitting Selenium WebDriver.")
+            driver.quit()
+
+    if not page_content:
+         return JsonResponse({"error": "Failed to retrieve page content using Selenium."})
+    print("PAGE CONTENT", page_content)
 
     # Define all timed functions
     tasks = [
@@ -144,17 +181,19 @@ async def analyze_page(request):
         ("h1_tag", run_async(timed(analyze_h1_tag), [page_content])),
         ("schema_validation", run_async(timed(validate_schema), [page_content])),
         ("ai_content_detection", run_async(timed(detect_ai_content), [page_content])),
-        ("page_speed", run_async(timed(analyze_page_speed), [url], timeout=60)),
+        ("page_speed", run_async(timed(analyze_page_speed), [url], timeout=60)), # [cite: 12]
         ("meta_tags", run_async(timed(check_meta_tags), [page_content])),
         ("keyword_summary", run_async(timed(analyze_keyword_summary), [page_content])),
-        ("anchor_tags", run_async(timed(analyze_anchor_tags), [page_content])),
+        ("anchor_tags", run_async(timed(analyze_anchor_tags), [page_content])), # This function's internal/external link accuracy depends on the *actual URL* of the page.
+                                                                              # Consider passing `url` to `analyze_anchor_tags` if more accuracy is needed there.
         ("url_structure", run_async(timed(analyze_url_structure), [url])),
         ("robots_txt", run_async(timed(validate_robots_txt), [url])),
         ("xml_sitemap", run_async(timed(validate_sitemap), [url])),
         ("blog_optimization", run_async(timed(analyze_blog_optimization), [page_content, url])),
-        ("detect_broken_urls", run_async(timed(detect_broken_urls), [url])),
+        ("detect_broken_urls", run_async(timed(detect_broken_urls), [url])), # Note: detect_broken_urls still uses 'requests' for its initial fetch.
+                                                                           # If this also needs Selenium, it would need similar modifications.
         ("html_structure", run_async(timed(analyze_html_structure), [page_content])),
-        ("da_pa_spam_score", run_async(timed(analyze_da_pa_spam), [url])),
+        ("da_pa_spam_score", run_async(timed(analyze_da_pa_spam), [url])), # [cite: 13]
     ]
 
     results = await asyncio.gather(*(t[1] for t in tasks))
@@ -604,15 +643,67 @@ def check_meta_tags(content):
 # 7. Broken URL Detection
 def detect_broken_urls(url, max_threads=10):
     """
-    Detects broken internal and external links on the page. Returns only broken URLs.
+    Detects broken internal and external links on the page.
+    Uses Selenium to fetch the initial page content.
+    Returns only broken URLs.
     """
-    print("Broken URL Detection Running")
+    print("Broken URL Detection Running (using Selenium for initial fetch)")
 
     broken_urls_info = []
     processed_urls = set() # Avoid checking the same URL multiple times
+    page_content_for_links = None
+    driver = None  # Initialize driver to None
+
+    # --- Fetch initial page content with Selenium ---
+    try:
+        print(f"Initializing Selenium WebDriver for link extraction from: {url}")
+        chrome_options = Options()
+        headers = HEADERS.copy() # Defined globally
+        headers["User-Agent"] = random.choice(USER_AGENTS) # Defined globally
+        
+        chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument(f"user-agent={headers['User-Agent']}")
+        chrome_options.add_argument("--window-size=1920,1080")
+        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+        chrome_options.add_experimental_option('excludeSwitches', ['enable-logging', 'enable-automation'])
+        chrome_options.add_experimental_option('useAutomationExtension', False)
+        
+        try:
+            driver = webdriver.Chrome(service=ChromeService(ChromeDriverManager().install()), options=chrome_options)
+        except Exception as e:
+            print(f"WebDriverManager failed for detect_broken_urls: {e}. Ensure ChromeDriver is in your PATH or specify its path.")
+            return {"broken_urls": [], "error": f"Could not initialize WebDriver for link detection: {str(e)}", "suggestions": []}
+
+        driver.set_page_load_timeout(REQUEST_TIMEOUT) # Defined globally
+        driver.get(url)
+        
+        # Optional: Add a small wait if links are dynamically loaded shortly after page load
+        # time.sleep(2) # Adjust as needed, or use explicit waits
+
+        page_content_for_links = driver.page_source
+        print(f"Initial page content for link extraction fetched successfully with Selenium from {url}")
+
+    except TimeoutException:
+        return {"broken_urls": [], "error": f"Selenium timed out loading {url} for link extraction.", "suggestions": ["Page load timed out. The page might be too slow or unresponsive."]}
+    except WebDriverException as e:
+        return {"broken_urls": [], "error": f"Selenium WebDriver error loading {url} for link extraction: {str(e)}", "suggestions": ["WebDriver error occurred. Check browser/driver compatibility or network issues."]}
+    except Exception as e:
+        return {"broken_urls": [], "error": f"Error fetching page {url} with Selenium for link extraction: {str(e)}", "suggestions": ["An unexpected error occurred during the initial page fetch."]}
+    finally:
+        if driver:
+            print(f"Quitting Selenium WebDriver for link extraction from {url}")
+            driver.quit()
+
+    if not page_content_for_links:
+        return {"broken_urls": [], "error": f"Failed to retrieve page content from {url} using Selenium for link extraction.", "suggestions": ["Could not get page source after Selenium load."]}
+    # --- End Selenium fetch ---
+
 
     def check_link_status(link_to_check):
-        """Helper function to check URL status."""
+        """Helper function to check URL status (uses requests)."""
         if link_to_check in processed_urls:
             return None # Already checked
 
@@ -620,77 +711,69 @@ def detect_broken_urls(url, max_threads=10):
 
         try:
             # Use HEAD request for efficiency, fallback to GET if HEAD fails/is disallowed
-            response = requests.head(link_to_check, headers=HEADERS, allow_redirects=True, timeout=REQUEST_TIMEOUT)
+            response = requests.head(link_to_check, headers=HEADERS, allow_redirects=True, timeout=REQUEST_TIMEOUT) # [cite: 58]
             # Some servers block HEAD, try GET
             if not response.ok: # Status code >= 400 or other issue with HEAD
                  time.sleep(0.2) # Small delay before GET
-                 response = requests.get(link_to_check, headers=HEADERS, allow_redirects=True, timeout=REQUEST_TIMEOUT)
+                 response = requests.get(link_to_check, headers=HEADERS, allow_redirects=True, timeout=REQUEST_TIMEOUT) # [cite: 59]
 
             if not response.ok: # Check status code after HEAD or GET
                 return (link_to_check, response.status_code) # Broken URL with status code
             return None # Valid URL
 
         except requests.exceptions.Timeout:
-            return (link_to_check, "Timeout")
+            return (link_to_check, "Timeout") # [cite: 60]
         except requests.exceptions.RequestException as e:
-            # Simplify common errors
             error_str = str(e)
             if "SSL" in error_str: return (link_to_check, "SSL Error")
             if "Connection refused" in error_str: return (link_to_check, "Connection Refused")
-            if "Name or service not known" in error_str: return (link_to_check, "DNS Error")
+            if "Name or service not known" in error_str: return (link_to_check, "DNS Error") # [cite: 61]
             return (link_to_check, f"Request Error: {type(e).__name__}") # Generic error
         except Exception as e: # Catch other potential errors
              return (link_to_check, f"Unexpected Error: {type(e).__name__}")
 
     try:
-        # Fetch the initial page
-        response = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, 'html.parser')
+        # Parse the HTML obtained from Selenium
+        soup = BeautifulSoup(page_content_for_links, 'html.parser') # [cite: 62]
 
         # Extract all valid http/https links
         links_to_check = set()
         for link_tag in soup.find_all('a', href=True):
             href = link_tag['href']
-            # Basic validation and normalization
             if href and not href.startswith(('#', 'javascript:', 'mailto:', 'tel:')):
-                absolute_link = urljoin(url, href) # Resolve relative URLs
+                absolute_link = urljoin(url, href) # Resolve relative URLs [cite: 63]
                 parsed_link = urlparse(absolute_link)
                 if parsed_link.scheme in ['http', 'https']:
-                    # Remove fragments (#) for checking
                     links_to_check.add(parsed_link._replace(fragment="").geturl())
 
         # Check links concurrently
-        if links_to_check:
+        if links_to_check: # [cite: 64]
             with ThreadPoolExecutor(max_workers=max_threads) as executor:
                 future_to_link = {executor.submit(check_link_status, link): link for link in links_to_check}
                 for future in as_completed(future_to_link):
                     result = future.result()
-                    if result: # If function returned a broken link tuple
+                    if result: # If function returned a broken link tuple [cite: 65]
                         broken_urls_info.append({"url": result[0], "status": result[1]})
         else:
-             # No links found to check
              pass
 
 
-        suggestions = []
+        suggestions = [] # [cite: 66]
         if broken_urls_info:
-            suggestions.append(f"Found {len(broken_urls_info)} potentially broken links. Broken links negatively impact user experience and can waste crawl budget.")
-            suggestions.append("Review the listed URLs and update or remove them. Check both internal and external links.")
+            suggestions.append(f"Found {len(broken_urls_info)} potentially broken links. Broken links negatively impact user experience and can waste crawl budget.") # [cite: 66, 67]
+            suggestions.append("Review the listed URLs and update or remove them. Check both internal and external links.") # [cite: 67]
         else:
             suggestions.append("No broken links detected in this scan. Regularly check for broken links as part of website maintenance.")
 
         return {
-            "broken_urls": broken_urls_info, # Only return broken ones
-            "suggestions": suggestions
+            "broken_urls": broken_urls_info,
+            "suggestions": suggestions # [cite: 68]
         }
 
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching the page ({url}) for link checking: {e}")
-        return {"broken_urls": [], "error": f"Could not fetch the page to check links: {str(e)}"}
+    # Removed the initial requests.get error handling as Selenium fetch is handled above
     except Exception as e:
-        print(f"Unexpected error during broken link detection for {url}: {e}")
-        return {"broken_urls": [], "error": f"An unexpected error occurred during link checking: {str(e)}"}
+        print(f"Unexpected error during broken link parsing/checking for {url} (after initial Selenium fetch): {e}")
+        return {"broken_urls": [], "error": f"An unexpected error occurred during link parsing or checking: {str(e)}", "suggestions": ["An error occurred after fetching the page. The content might be malformed or an issue with link processing."]} # [cite: 69]
 
 
 # 8. Keyword Analysis and Summary (Enhanced)
