@@ -47,30 +47,27 @@ except nltk.downloader.DownloadError:
 PAGESPEED_API_KEY = settings.PAGESPEED_API_KEY
 serpapi_key = settings.SERPAPI_KEY
 PAGESPEED_TIMEOUT = 500
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                  "AppleWebKit/537.36 (KHTML, like Gecko) "
-                  "Chrome/122.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+HEADERS = { 
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36", # Updated Chrome version
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
     "Accept-Language": "en-US,en;q=0.9",
     "Referer": "https://www.google.com/",
-    "DNT": "1",  # Do Not Track
+    "DNT": "1",
     "Connection": "keep-alive",
-    "Upgrade-Insecure-Requests": "1"
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "cross-site", # Can be 'same-origin', 'same-site', 'cross-site', 'none'
+    "Sec-Fetch-User": "?1",
+    "TE": "trailers" 
 }
-
-# Add this list of user agents below HEADERS
-USER_AGENTS = [
-    # Chrome
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36",
-    # Firefox
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/118.0",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/118.0",
-    # Safari
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.4 Safari/605.1.15",
-    # Edge
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36 Edg/117.0.2045.60"
+USER_AGENTS = [ 
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0", # Updated Firefox
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:124.0) Gecko/20100101 Firefox/124.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Safari/605.1.15", # Updated Safari
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 Edg/123.0.0.0" # Updated Edge
 ]
 SOCIAL_MEDIA_DOMAINS = [
     "facebook.com", "www.facebook.com",
@@ -657,28 +654,28 @@ def check_meta_tags(content):
 # 7. Broken URL Detection
 def detect_broken_urls(url, max_threads=10):
     """
-    Detects broken internal and external links on the page.
+    Detects broken internal and external links on the page using a simpler check.
     Uses Selenium to fetch the initial page content.
     Returns only broken URLs and bypasses social media links.
     """
-    print(f"Broken URL Detection Running for: {url} (using Selenium for initial fetch)")
+    print(f"Broken URL Detection (Simpler) Running for: {url}")
 
     broken_urls_info = []
     processed_urls = set()
     page_content_for_links = None
     driver = None
 
+    # --- Fetch initial page content with Selenium ---
     try:
         print(f"Initializing Selenium WebDriver for link extraction from: {url}")
         chrome_options = Options()
-        # Using a random user agent from USER_AGENTS for Selenium
         selenium_user_agent = random.choice(USER_AGENTS)
         
         chrome_options.add_argument("--headless")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument(f"user-agent={selenium_user_agent}") # Use chosen UA
+        chrome_options.add_argument(f"user-agent={selenium_user_agent}")
         chrome_options.add_argument("--window-size=1920,1080")
         chrome_options.add_argument("--disable-blink-features=AutomationControlled")
         chrome_options.add_experimental_option('excludeSwitches', ['enable-logging', 'enable-automation'])
@@ -687,72 +684,52 @@ def detect_broken_urls(url, max_threads=10):
         try:
             driver = webdriver.Chrome(service=ChromeService(ChromeDriverManager().install()), options=chrome_options)
         except Exception as e:
-            print(f"WebDriverManager failed for detect_broken_urls: {e}. Ensure ChromeDriver is in your PATH or specify its path.")
-            return {"broken_urls": [], "error": f"Could not initialize WebDriver for link detection: {str(e)}", "suggestions": ["WebDriver initialization failed."]}
+            print(f"WebDriverManager failed for detect_broken_urls: {e}.")
+            return {"broken_urls": [], "error": f"Could not initialize WebDriver: {str(e)}", "suggestions": ["WebDriver initialization failed."], "links_summary": {}}
 
         driver.set_page_load_timeout(REQUEST_TIMEOUT) 
         print(f"Selenium navigating to {url} with UA: {selenium_user_agent}")
         driver.get(url)
         
-        # Optional: Add a small explicit wait for better reliability on JS-heavy pages
-        # from selenium.webdriver.support.ui import WebDriverWait
-        # from selenium.webdriver.support import expected_conditions as EC
-        # from selenium.webdriver.common.by import By
-        # try:
-        #     WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-        # except TimeoutException:
-        #     print(f"Selenium timed out waiting for body tag on {url}")
-            # Continue anyway, page_source might still be useful
-
         page_content_for_links = driver.page_source
-        # print(f"Initial page content (first 300 chars) for link extraction from {url}: {page_content_for_links[:300]}") # For debugging
-        print(f"Initial page content for link extraction fetched successfully with Selenium from {url}")
+        print(f"Initial page content fetched successfully with Selenium from {url}")
 
     except TimeoutException:
         print(f"Selenium timed out loading {url} for link extraction.")
-        return {"broken_urls": [], "error": f"Selenium timed out loading {url} for link extraction.", "suggestions": ["Page load timed out during initial fetch. The page might be too slow or unresponsive."]}
+        return {"broken_urls": [], "error": f"Selenium timed out loading {url}.", "suggestions": ["Page load timed out (Selenium)."], "links_summary": {}}
     except WebDriverException as e:
-        print(f"Selenium WebDriver error loading {url} for link extraction: {str(e)}")
-        return {"broken_urls": [], "error": f"Selenium WebDriver error loading {url} for link extraction: {str(e)}", "suggestions": ["WebDriver error occurred. Check browser/driver compatibility or network issues."]}
+        print(f"Selenium WebDriver error loading {url}: {str(e)}")
+        return {"broken_urls": [], "error": f"Selenium WebDriver error: {str(e)}", "suggestions": ["WebDriver error occurred."], "links_summary": {}}
     except Exception as e:
-        print(f"Error fetching page {url} with Selenium for link extraction: {str(e)}")
-        return {"broken_urls": [], "error": f"Error fetching page {url} with Selenium for link extraction: {str(e)}", "suggestions": ["An unexpected error occurred during the initial page fetch with Selenium."]}
+        print(f"Error fetching page {url} with Selenium: {str(e)}")
+        return {"broken_urls": [], "error": f"Error fetching page with Selenium: {str(e)}", "suggestions": ["Unexpected error during Selenium fetch."], "links_summary": {}}
     finally:
         if driver:
-            print(f"Quitting Selenium WebDriver for link extraction from {url}")
+            print(f"Quitting Selenium WebDriver for {url}")
             driver.quit()
 
     if not page_content_for_links:
-        print(f"Failed to retrieve page content from {url} using Selenium for link extraction.")
-        return {"broken_urls": [], "error": f"Failed to retrieve page content from {url} using Selenium for link extraction.", "suggestions": ["Could not get page source after Selenium load."]}
+        print(f"Failed to retrieve page content from {url} using Selenium.")
+        return {"broken_urls": [], "error": "Failed to retrieve page content (Selenium).", "suggestions": ["Could not get page source."], "links_summary": {}}
 
-    def check_link_status(link_to_check):
+    # --- Simpler Link Status Check ---
+    def check_link_status_simple(link_to_check):
         if link_to_check in processed_urls:
             return None 
         processed_urls.add(link_to_check)
         
-        # Use the global HEADERS for requests
-        current_headers = HEADERS.copy() 
+        current_headers = HEADERS.copy() # Use a copy of the global HEADERS
 
         try:
-            # Try HEAD request first
-            # print(f"Checking (HEAD): {link_to_check}") # Debug
-            response = requests.head(link_to_check, headers=current_headers, allow_redirects=True, timeout=REQUEST_TIMEOUT)
-            if response.ok:
-                # print(f"OK (HEAD {response.status_code}): {link_to_check}") # Debug
-                return None # Link is OK
-
-            # If HEAD fails or returns non-OK, try GET (some servers disallow HEAD or behave differently)
-            # print(f"HEAD failed ({response.status_code}), trying GET: {link_to_check}") # Debug
-            time.sleep(0.1) # Small delay
+            # print(f"Checking (GET): {link_to_check}") # Debug
             response = requests.get(link_to_check, headers=current_headers, allow_redirects=True, timeout=REQUEST_TIMEOUT)
             
-            if response.ok:
+            if response.ok: # response.ok checks for status_code < 400
                 # print(f"OK (GET {response.status_code}): {link_to_check}") # Debug
                 return None # Link is OK
 
-            # If GET also not OK, then it's considered broken
-            print(f"BROKEN ({response.status_code}): {link_to_check} (URL: {response.url})") # Log status and final URL after redirects
+            # If not response.ok, it's considered broken
+            print(f"BROKEN ({response.status_code}): {link_to_check} (Final URL: {response.url})")
             return (link_to_check, response.status_code)
 
         except requests.exceptions.Timeout:
@@ -761,34 +738,26 @@ def detect_broken_urls(url, max_threads=10):
         except requests.exceptions.SSLError:
             print(f"BROKEN (SSL Error): {link_to_check}")
             return (link_to_check, "SSL Error")
-        except requests.exceptions.ConnectionError as e:
-            # More specific connection errors
-            error_str = str(e).lower()
-            if "dns" in error_str or "name or service not known" in error_str:
-                 print(f"BROKEN (DNS Error): {link_to_check}")
-                 return (link_to_check, "DNS Error")
-            if "connection refused" in error_str:
-                 print(f"BROKEN (Connection Refused): {link_to_check}")
-                 return (link_to_check, "Connection Refused")
-            print(f"BROKEN (Connection Error): {link_to_check} - {e}")
+        except requests.exceptions.ConnectionError:
+            # This is a broad category, could be DNS, refused, etc.
+            print(f"BROKEN (Connection Error): {link_to_check}")
             return (link_to_check, "Connection Error")
         except requests.exceptions.RequestException as e:
-            # Catch other requests-related errors
-            print(f"BROKEN (Request Error {type(e).__name__}): {link_to_check} - {e}")
+            print(f"BROKEN (Request Error {type(e).__name__}): {link_to_check}")
             return (link_to_check, f"Request Error: {type(e).__name__}")
         except Exception as e: 
-             print(f"BROKEN (Unexpected Error {type(e).__name__}): {link_to_check} - {e}")
+             print(f"BROKEN (Unexpected Error {type(e).__name__}): {link_to_check}")
              return (link_to_check, f"Unexpected Error: {type(e).__name__}")
 
+    # --- Link Extraction and Checking ---
     try:
         soup = BeautifulSoup(page_content_for_links, 'html.parser')
-        links_to_check_futures = []
+        links_to_process = [] # Changed name for clarity
         
         print(f"Extracting links from {url}...")
         count_total_found = 0
         count_social_skipped = 0
-        count_to_check = 0
-
+        
         for link_tag in soup.find_all('a', href=True):
             href = link_tag['href']
             count_total_found += 1
@@ -798,26 +767,27 @@ def detect_broken_urls(url, max_threads=10):
                 parsed_link = urlparse(absolute_link)
 
                 if parsed_link.scheme in ['http', 'https']:
-                    final_link_to_process = parsed_link._replace(fragment="").geturl()
+                    final_link = parsed_link._replace(fragment="").geturl()
                     
-                    # Bypass social media domains
-                    if parsed_link.netloc.lower() in SOCIAL_MEDIA_DOMAINS:
-                        # print(f"Skipping social media link: {final_link_to_process}") # Debug
+                    if parsed_link.netloc.lower().strip("www.") in SOCIAL_MEDIA_DOMAINS or \
+                       parsed_link.netloc.lower() in SOCIAL_MEDIA_DOMAINS : # Check with and without www.
                         count_social_skipped +=1
-                        continue # Skip this link
+                        continue 
 
-                    if final_link_to_process not in processed_urls: # Avoid adding duplicates for checking
-                        links_to_check_futures.append(final_link_to_process)
-                        count_to_check +=1
+                    if final_link not in processed_urls: 
+                        links_to_process.append(final_link)
         
+        # Remove duplicates that might have been added before processed_urls check if logic changes
+        unique_links_to_check = list(set(links_to_process))
+        count_to_check = len(unique_links_to_check)
+
         print(f"Found {count_total_found} total <a> tags with hrefs.")
         print(f"Skipped {count_social_skipped} social media links.")
         print(f"Will check {count_to_check} unique, non-social links.")
 
-        if links_to_check_futures:
+        if unique_links_to_check:
             with ThreadPoolExecutor(max_workers=max_threads) as executor:
-                # Map submits tasks and returns futures in the order of completion (or as they are submitted)
-                future_to_url_map = {executor.submit(check_link_status, link_url): link_url for link_url in links_to_check_futures}
+                future_to_url_map = {executor.submit(check_link_status_simple, link_url): link_url for link_url in unique_links_to_check}
                 for future in as_completed(future_to_url_map):
                     result = future.result()
                     if result: 
@@ -825,26 +795,28 @@ def detect_broken_urls(url, max_threads=10):
         
         suggestions = []
         if broken_urls_info:
-            suggestions.append(f"Found {len(broken_urls_info)} potentially broken links (excluding social media). Broken links negatively impact user experience and can waste crawl budget.")
-            suggestions.append("Review the listed URLs and their status codes. Update or remove them. Common issues include typos, moved content (404), server errors (5xx), or access restrictions.")
+            suggestions.append(f"Found {len(broken_urls_info)} potentially broken links (simpler check, excluding social media).")
+            suggestions.append("Review the listed URLs and their status codes. If these links work in your browser, the server might be treating automated requests differently.")
+            suggestions.append("If you find that some links are incorrectly marked as broken, consider adjusting your server's handling of automated requests or using a more robust link checking method.")
+
         else:
-            suggestions.append("No broken links detected in this scan (excluding social media). Regularly check for broken links as part of website maintenance.")
+            suggestions.append("No broken links detected with this simpler scan (excluding social media).")
         
-        print(f"Broken link check finished for {url}. Found {len(broken_urls_info)} broken links.")
+        print(f"Broken link check (simpler) finished for {url}. Found {len(broken_urls_info)} broken links.")
         return {
             "broken_urls": broken_urls_info,
             "suggestions": suggestions,
             "links_summary": {
                 "total_found_hrefs": count_total_found,
                 "social_media_skipped": count_social_skipped,
-                "unique_links_checked": count_to_check, # This is actually number of links submitted for check
+                "unique_links_checked": count_to_check,
                 "broken_links_found": len(broken_urls_info)
             }
         }
 
     except Exception as e:
-        print(f"Unexpected error during broken link parsing/checking for {url} (after initial Selenium fetch): {e}")
-        return {"broken_urls": [], "error": f"An unexpected error occurred during link parsing or checking: {str(e)}", "suggestions": ["An error occurred after fetching the page. The content might be malformed or an issue with link processing."], "links_summary": {}}
+        print(f"Unexpected error during link parsing/checking for {url}: {e}")
+        return {"broken_urls": [], "error": f"Unexpected error during link processing: {str(e)}", "suggestions": ["An error occurred after fetching the page."], "links_summary": {}}
 
 
 # 8. Keyword Analysis and Summary (Enhanced)
