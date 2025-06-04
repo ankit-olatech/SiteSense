@@ -794,12 +794,12 @@ def detect_broken_urls(url, max_threads=10):
         
         suggestions = []
         if broken_urls_info:
-            suggestions.append(f"Found {len(broken_urls_info)} potentially broken links (simpler check, excluding social media).")
+            suggestions.append(f"Found {len(broken_urls_info)} potentially broken links.")
             suggestions.append("Review the listed URLs and their status codes. If these links work in your browser, the server might be treating automated requests differently.")
             suggestions.append("If you find that some links are incorrectly marked as broken, consider adjusting your server's handling of automated requests or using a more robust link checking method.")
 
         else:
-            suggestions.append("No broken links detected with this simpler scan (excluding social media).")
+            suggestions.append("No broken links detected.")
         
         print(f"Broken link check (simpler) finished for {url}. Found {len(broken_urls_info)} broken links.")
         return {
