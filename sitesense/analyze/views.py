@@ -721,12 +721,11 @@ def detect_broken_urls(url, max_threads=10):
         current_headers = HEADERS.copy() # Use a copy of the global HEADERS
 
         try:
-            # print(f"Checking (GET): {link_to_check}") # Debug
+            response = requests.head(link_to_check, headers=current_headers, allow_redirects=True, timeout=REQUEST_TIMEOUT)
+            if response.status_code in [403, 405, 501]:  # HEAD not allowed
+                response = requests.get(link_to_check, headers=current_headers, allow_redirects=True, timeout=REQUEST_TIMEOUT)
+        except Exception:
             response = requests.get(link_to_check, headers=current_headers, allow_redirects=True, timeout=REQUEST_TIMEOUT)
-            
-            if response.ok: # response.ok checks for status_code < 400
-                # print(f"OK (GET {response.status_code}): {link_to_check}") # Debug
-                return None # Link is OK
 
             # If not response.ok, it's considered broken
             print(f"BROKEN ({response.status_code}): {link_to_check} (Final URL: {response.url})")
