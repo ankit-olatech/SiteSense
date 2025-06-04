@@ -949,17 +949,22 @@ def analyze_keyword_summary(page_content):
         score = sum([sent.lower().count(kw.lower()) for kw in keyword_list])
         if score > 0:
             sentence_scores[sent] = score
+    top_sentences = [s for s, _ in sorted(sentence_scores.items(), key=lambda x: x[1], reverse=True)[:3]]
+    if keyword_list:
+        summary_intro = f"This page focuses on {keyword_list[0]} and related topics like {', '.join(keyword_list[1:4])}."
+        summary = summary_intro + " " + " ".join(top_sentences)
+    else:
+        summary = " ".join(top_sentences)
 
-    summary = " ".join([s for s, _ in sorted(sentence_scores.items(), key=lambda x: x[1], reverse=True)[:3]])
-
-    # Suggestions
-    suggestions = [f"Write about: {kw} tips, benefits, strategies" for kw in keyword_list]
+    suggestions = [f"Write about: {kw} trends, strategies, and use cases" for kw in keyword_list]
     guidelines = [
-        "Include top keywords in title and headings (H1–H6).",
-        "Use semantic variations, avoid keyword stuffing.",
-        "Structure content clearly using subheadings.",
-        "Link between related pages with keyword-rich anchor text.",
-    ]
+        "Include primary keywords in your title, meta, and first paragraph.",
+        "Use semantic variations and related phrases to avoid repetition.",
+        "Structure content with H2/H3 tags that reflect keyword clusters.",
+        "Internally link to relevant pages using anchor texts with keywords.",
+        "Add image alt texts that reflect content topics.",
+        "Ensure presence of canonical tags and structured data (schema)."
+    ]   
 
     print("KEYWORD ANALYSIS FINISHED!")
     return {
