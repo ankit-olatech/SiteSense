@@ -41,6 +41,7 @@ try:
 except nltk.downloader.DownloadError:
     nltk.download('stopwords')
 # -----------------------------------------------------------
+import spacy
 
 # --- Constants ---
 # Use environment variables for API keys in production!
@@ -856,126 +857,112 @@ def load_stopwords(custom_file_path):
         return base_stopwords
 STOP_WORDS_SET = load_stopwords("analyze/custom_stopwords.txt")
 print(STOP_WORDS_SET)
+nlp = spacy.load("en_core_web_sm")
+def lemmatize(text):
+    doc = nlp(text)
+    return " ".join([token.lemma_ for token in doc if not token.is_stop and token.is_alpha])
+
 
 def analyze_keyword_summary(page_content):
-    """
-    Enhanced keyword analysis using custom scoring aligned with Title, all Heading tags (H1-H6), Meta tags, ALT texts, Anchor texts, and main body content.
-    """
     soup = BeautifulSoup(page_content, 'html.parser')
+
+    # Extract main readable content
     main_content = soup.find('main') or soup.find('article') or soup.find('body')
-    body_text = main_content.get_text(separator=" ", strip=True) if main_content else soup.get_text(separator=" ", strip=True)
+    body_text = main_content.get_text(" ", strip=True) if main_content else soup.get_text(" ", strip=True)
 
-    # Extract title
-    title_text = soup.title.string.strip() if soup.title else ""
-
-    # Extract meta description and keywords
-    meta_description = ""
-    meta_keywords = ""
+    # Extract sections
+    title = soup.title.string.strip() if soup.title else ""
+    meta_description, meta_keywords = "", ""
     for meta in soup.find_all("meta"):
         name = meta.get("name", "").lower()
-        if name == "description" and 'content' in meta.attrs:
-            meta_description = meta['content'].strip()
-        elif name == "keywords" and 'content' in meta.attrs:
-            meta_keywords = meta['content'].strip()
+        if name == "description":
+            meta_description = meta.get("content", "").strip()
+        elif name == "keywords":
+            meta_keywords = meta.get("content", "").strip()
 
-    # Extract all headings h1 to h6
-    heading_tags = [f"h{i}" for i in range(1, 7)]
-    all_headings = [tag.get_text(strip=True) for h in heading_tags for tag in soup.find_all(h)]
+    headings = [h.get_text(strip=True) for i in range(1, 7) for h in soup.find_all(f"h{i}")]
+    alt_texts = [img.get("alt", "").strip() for img in soup.find_all("img", alt=True)]
+    anchor_texts = [a.get_text(strip=True) for a in soup.find_all("a", href=True)]
 
-    # Extract ALT text from images
-    alt_texts = [img['alt'].strip() for img in soup.find_all('img', alt=True)]
-
-    # Extract anchor text
-    anchor_texts = [a.get_text(strip=True) for a in soup.find_all('a', href=True) if a.get_text(strip=True)]
-
-    # Combine all with boost emphasis
+    # Combine all content with priority weighting
     combined_text = " ".join(
-        [title_text] * 3 +
-        all_headings * 2 +
-        [meta_description] * 2 +
-        [meta_keywords] * 2 +
+        [title] * 3 +
+        [meta_description, meta_keywords] * 2 +
+        headings * 2 +
         alt_texts +
         anchor_texts +
         [body_text]
     )
 
-    cleaned_text = clean_text_for_keywords(combined_text)
-    tokens = word_tokenize(cleaned_text)
-    filtered_tokens = [t for t in tokens if t not in STOP_WORDS_SET]
+    cleaned = clean_text_for_keywords(combined_text)
+    lemmatized = lemmatize(cleaned)
 
-    if len(filtered_tokens) < 10:
-        return {
-            "top_keywords": [],
-            "keyword_density": {},
-            "summary": "Insufficient text for keyword extraction.",
-            "gist": "Not enough content.",
-            "seo_suggestions": {"suggested_keywords": [], "guidelines": ["Add more relevant content."]},
-            "error": "Insufficient text content."
-        }
+    # TF-IDF scoring
+    vectorizer = TfidfVectorizer(ngram_range=(1, 3), max_features=100)
+    tfidf_matrix = vectorizer.fit_transform([lemmatized])
+    tfidf_scores = list(zip(vectorizer.get_feature_names_out(), tfidf_matrix.toarray()[0]))
+    top_keywords = sorted(tfidf_scores, key=lambda x: x[1], reverse=True)[:15]
 
-    # Frequency scoring
-    freq = Counter(filtered_tokens)
-    bigrams = Counter(get_ngrams(filtered_tokens, 2))
-    trigrams = Counter(get_ngrams(filtered_tokens, 3))
+    # Keyword density
+    total_words = len(lemmatized.split())
+    keyword_density = {
+        kw: f"{round((lemmatized.count(kw) / total_words) * 100, 2)}%" if total_words else "0%" for kw, _ in top_keywords[:6]
+    }
 
-    combined_freq = freq + Counter({ " ".join(k): v for k, v in bigrams.items() if v > 1 })
-    combined_freq.update({ " ".join(k): v for k, v in trigrams.items() if v > 1 })
-
-    # Boost words found in title, headings, meta, alt, anchors
-    boost_sources = title_text + " ".join(all_headings + alt_texts + anchor_texts + [meta_description, meta_keywords])
-    boost_keywords = word_tokenize(clean_text_for_keywords(boost_sources))
-    for word in boost_keywords:
-        if word in combined_freq:
-            combined_freq[word] += 3  # boost
-
-    # Top 15 keywords
-    top_keywords = dict(combined_freq.most_common(15))
-
-    # Keyword Density (limit to first 6 words)
-    total_words = len(tokens)
-    keyword_density = {}
-    for kw, count in list(top_keywords.items())[:6]:
-        occurrences = len(re.findall(r'\b' + re.escape(kw) + r'\b', cleaned_text, re.IGNORECASE))
-        density = round((occurrences / total_words) * 100, 2)
-        keyword_density[kw] = f"{density}%"
+    keyword_list = [kw for kw, _ in top_keywords[:5]]
 
     # Summary generation
     original_sentences = sent_tokenize(body_text)
-    keyword_list = list(top_keywords.keys())[:5]
     sentence_scores = {}
-
     for sent in original_sentences:
-        score = sum([sent.lower().count(kw.lower()) for kw in keyword_list])
+        score = sum(sent.lower().count(kw.lower()) for kw in keyword_list)
         if score > 0:
             sentence_scores[sent] = score
     top_sentences = [s for s, _ in sorted(sentence_scores.items(), key=lambda x: x[1], reverse=True)[:3]]
+
     if keyword_list:
         summary_intro = f"This page focuses on {keyword_list[0]} and related topics like {', '.join(keyword_list[1:4])}."
         summary = summary_intro + " " + " ".join(top_sentences)
     else:
         summary = " ".join(top_sentences)
 
-    suggestions = [f"Write about: {kw} trends, strategies, and use cases" for kw in keyword_list]
-    guidelines = [
-        "Include primary keywords in your title, meta, and first paragraph.",
-        "Use semantic variations and related phrases to avoid repetition.",
-        "Structure content with H2/H3 tags that reflect keyword clusters.",
-        "Internally link to relevant pages using anchor texts with keywords.",
-        "Add image alt texts that reflect content topics.",
-        "Ensure presence of canonical tags and structured data (schema)."
-    ]   
+    # --- Dynamic SEO Suggestions Based on Keyword Placement ---
+    missing_title_keywords = [kw for kw in keyword_list if kw.lower() not in title.lower()]
+    missing_heading_keywords = [kw for kw in keyword_list if all(kw.lower() not in h.lower() for h in headings)]
+    missing_meta_keywords = [kw for kw in keyword_list if kw.lower() not in (meta_description + meta_keywords).lower()]
+    missing_alt_keywords = [kw for kw in keyword_list if all(kw.lower() not in alt.lower() for alt in alt_texts)]
+    missing_anchor_keywords = [kw for kw in keyword_list if all(kw.lower() not in a.lower() for a in anchor_texts)]
+
+    dynamic_guidelines = []
+    if missing_title_keywords:
+        dynamic_guidelines.append(f"Include keywords like {', '.join(missing_title_keywords)} in your <title> tag.")
+    if missing_heading_keywords:
+        dynamic_guidelines.append(f"Use keywords like {', '.join(missing_heading_keywords)} in H1-H3 tags for better semantic structure.")
+    if missing_meta_keywords:
+        dynamic_guidelines.append(f"Add keywords such as {', '.join(missing_meta_keywords)} in your meta description and keywords.")
+    if missing_alt_keywords:
+        dynamic_guidelines.append(f"Add descriptive ALT texts for images using keywords like {', '.join(missing_alt_keywords)}.")
+    if missing_anchor_keywords:
+        dynamic_guidelines.append(f"Internally link using anchor texts that include: {', '.join(missing_anchor_keywords)}.")
+
+    # Always add general SEO reminders
+    dynamic_guidelines += [
+        "Use structured data (schema.org) to improve SERP visibility.",
+        "Ensure fast page load and mobile responsiveness for ranking boost."
+    ]
 
     print("KEYWORD ANALYSIS FINISHED!")
     return {
-        "top_keywords": [{"keyword": k, "score": v} for k, v in list(top_keywords.items())[:5]],
+        "top_keywords": [{"keyword": k, "score": round(v, 4)} for k, v in top_keywords[:5]],
         "keyword_density": keyword_density,
         "summary": summary,
         "gist": f"The page focuses on: {', '.join(keyword_list)}",
-        "seo_suggestions": {"suggested_keywords_ideas": suggestions, "guidelines": guidelines},
+        "seo_suggestions": {
+            "suggested_keywords_ideas": [f"Write about: {kw} trends, strategies, and use cases" for kw in keyword_list],
+            "guidelines": dynamic_guidelines
+        },
         "error": None
     }
-
-
 
 
 # 9. Anchor Tag Analysis
