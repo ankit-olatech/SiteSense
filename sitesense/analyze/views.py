@@ -436,48 +436,48 @@ def flan_paraphrase(text, size="small", max_words=200):
     )
     return tokenizer.decode(output[0], skip_special_tokens=True)
 
-def detect_ai_content(content, model_size="small"):
+def detect_ai_content(content, model_size="small", enable_paraphrase=False):
     print("AI Detection Running")
     clean_content = preprocess_content(content)
-    performance_note = f"Using FLAN-T5-{model_size} for AI detection and paraphrasing."
+    performance_note = f"Using heuristics and optional FLAN-T5-{model_size} for AI detection."
 
+    # Fast fail for short content
     if len(clean_content) < 50:
         return {
             "performance_note": performance_note,
             "ai_detected_heuristic": False,
             "readability_score": None,
             "paraphrase_suggestion": "Content too short for reliable AI analysis or paraphrasing.",
+            "suggestions": [],
             "error": None
         }
 
-    ai_detected_heuristic = False
-    readability_score = None
-    error_message = None
-    paraphrased_output = "N/A"
-
-    # Heuristic patterns
-    generic_phrases = [
-        "in conclusion", "it is important to note", "as an AI language model",
+    # Heuristic scan — early exit
+    lower_content = clean_content.lower()
+    ai_detected_heuristic = any(phrase in lower_content for phrase in (
+        "in conclusion", "it is important to note", "as an ai language model",
         "unlock the power", "delve into the world", "in the digital age"
-    ]
-    for phrase in generic_phrases:
-        if phrase in clean_content.lower():
-            ai_detected_heuristic = True
-            break
+    ))
 
     # Readability score
     try:
         readability_score = flesch_reading_ease(clean_content)
     except Exception as e:
+        readability_score = None
         error_message = f"Error calculating readability: {str(e)}"
+    else:
+        error_message = None
 
-    # Paraphrasing
-    try:
-        paraphrased_output = flan_paraphrase(clean_content, size=model_size)
-    except Exception as e:
-        error_message = f"Paraphrasing error: {str(e)}"
-        paraphrased_output = "Paraphrasing failed due to error."
+    # Paraphrasing — optional and lazy-loaded
+    paraphrased_output = "Paraphrasing disabled for performance." if not enable_paraphrase else "N/A"
+    if enable_paraphrase:
+        try:
+            paraphrased_output = flan_paraphrase(clean_content, size=model_size)
+        except Exception as e:
+            error_message = f"Paraphrasing error: {str(e)}"
+            paraphrased_output = "Paraphrasing failed due to error."
 
+    # Suggestions
     suggestions = []
     if ai_detected_heuristic:
         suggestions.append("Heuristics indicate some AI-generated patterns in the content.")
@@ -486,13 +486,16 @@ def detect_ai_content(content, model_size="small"):
 
     if readability_score is not None:
         suggestions.append(f"Flesch Reading Ease: {readability_score:.2f}. Ideal range: 60–70 for general audience.")
+    else:
+        suggestions.append("Could not calculate readability score.")
 
-    suggestions.append("Consider using the paraphrase suggestion for a more human-like tone.")
+    if enable_paraphrase:
+        suggestions.append("Consider using the paraphrase suggestion for a more human-like tone.")
 
     return {
         "performance_note": performance_note,
         "ai_detected_heuristic": ai_detected_heuristic,
-        "readability_score": f"{readability_score:.2f}" if readability_score else "N/A",
+        "readability_score": f"{readability_score:.2f}" if readability_score is not None else "N/A",
         "paraphrase_suggestion": paraphrased_output,
         "suggestions": suggestions,
         "error": error_message
