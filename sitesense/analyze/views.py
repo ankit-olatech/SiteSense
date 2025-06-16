@@ -844,20 +844,20 @@ def get_ngrams(tokens, n):
     """Generates n-grams from a list of tokens."""
     return [" ".join(gram) for gram in ngrams(tokens, n)]
 def load_stopwords(custom_file_path):
-    # Load built-in stopwords
     base_stopwords = set(stopwords.words('english'))
     print("Stop Words are loaded")
     
-    # Load custom stopwords from file (one word per line)
     try:
-        print("loading Custom Stop words")
+        print("Loading Custom Stop words")
         with open(custom_file_path, 'r') as f:
             custom_words = {line.strip().lower() for line in f if line.strip()}
-            print("TEST STOP WORDS", base_stopwords.union(custom_words))
-        return base_stopwords.union(custom_words)
+            merged = base_stopwords.union(custom_words)
+            print("Merged Stop Words Sample:", list(merged)[:10])  # Print just a few to avoid clutter
+        return list(merged)
     except FileNotFoundError:
         print(f"Warning: Custom stopwords file not found at {custom_file_path}")
-        return base_stopwords
+        return list(base_stopwords)
+
 STOP_WORDS_SET = load_stopwords("analyze/custom_stopwords.txt")
 print(STOP_WORDS_SET)
 nlp = spacy.load("en_core_web_sm")
@@ -901,7 +901,7 @@ def analyze_keyword_summary(page_content):
     lemmatized = lemmatize(cleaned)
 
     # TF-IDF scoring
-    vectorizer = TfidfVectorizer(ngram_range=(1, 3), max_features=100)
+    vectorizer = TfidfVectorizer(ngram_range=(1, 3), max_features=100, stop_words=STOP_WORDS_SET)
     tfidf_matrix = vectorizer.fit_transform([lemmatized])
     tfidf_scores = list(zip(vectorizer.get_feature_names_out(), tfidf_matrix.toarray()[0]))
     top_keywords = sorted(tfidf_scores, key=lambda x: x[1], reverse=True)[:15]
