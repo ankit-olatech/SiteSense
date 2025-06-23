@@ -1361,21 +1361,26 @@ def analyze_html_structure(page_content):
     else:
          suggestions.append(f"Found semantic tags: {', '.join(semantic_tags_found)}. Using these tags helps define the structure for assistive technologies and search engines.")
 
-    # Heading structure check (already partially done in analyze_on_page_optimization, refined here)
     headings = soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
-    last_level = 0
+    last_level = None
     h1_found = False
+
     for heading in headings:
-         try:
+        try:
             level = int(heading.name[1])
-            if level == 1: h1_found = True
-            if level > last_level + 1:
-                 issue_text = f"Heading level skipped: Found <{heading.name}> after <h{last_level}>."
-                 if issue_text not in issues: # Avoid duplicate messages
-                      issues.append(issue_text)
+            if level == 1:
+                h1_found = True
+
+            # Only check skipping logic after the first valid heading
+            if last_level is not None and level > last_level + 1:
+                issue_text = f"Heading level skipped: Found <{heading.name}> after <h{last_level}>."
+                if issue_text not in issues:  # Avoid duplicate messages
+                    issues.append(issue_text)
+
             last_level = level
-         except (ValueError, IndexError):
-             continue # Ignore malformed heading tags like <h7>
+        except (ValueError, IndexError):
+            continue  # Ignore malformed heading tags like <h7>
+
 
     if not h1_found:
          if "Missing H1 tag." not in issues: # Avoid duplicate messages
