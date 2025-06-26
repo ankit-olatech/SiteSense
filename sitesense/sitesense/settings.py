@@ -29,6 +29,13 @@ ALLOWED_HOSTS = ["*"]
 PAGESPEED_API_KEY = "AIzaSyCzMj9hqnN8lSmMIc2vMQZ2mC9N-AcNvcQ"
 SERPAPI_KEY = "4f40c394632e672b6192e71ff553f0ae675da0e8140f3d5e5a899b94e218fd28"
 # Application definition
+# SiteSense/settings.py
+
+CELERY_BROKER_URL = 'redis://127.0.0.1:6379/0'
+CELERY_RESULT_BACKEND = 'redis://127.0.0.1:6379/0'
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+
 
 INSTALLED_APPS = [
     'django.contrib.admin',
