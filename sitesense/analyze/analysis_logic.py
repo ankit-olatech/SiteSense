@@ -173,22 +173,6 @@ def analyze_page_synchronously(url):
     print(f"✅ Analysis complete in {time.time() - start_time:.2f} seconds.")
     return result
 
-from celery.result import AsyncResult
-from django.http import JsonResponse
-
-def get_analysis_result(request, task_id):
-    result = AsyncResult(task_id)
-
-    if result.state == 'PENDING':
-        return JsonResponse({'status': 'pending'})
-    elif result.state == 'STARTED':
-        return JsonResponse({'status': 'started'})
-    elif result.state == 'FAILURE':
-        return JsonResponse({'status': 'failed', 'error': str(result.result)})
-    elif result.state == 'SUCCESS':
-        return JsonResponse({'status': 'success', 'data': result.result})
-    else:
-        return JsonResponse({'status': result.state})
 
 
 # --- Analysis Functions ---
